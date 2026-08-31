@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App'
+import SettingsScreen from '../src/SettingsScreen'
+import appStyles from '../src/styles.css?raw'
 import { CURSES, type CurseCategory } from '../src/curses'
 import {
   DOLL_LIMIT_MESSAGE,
@@ -43,6 +45,37 @@ async function openCurseRoomFromArchive(name = '바늘') {
   await user.click(await screen.findByRole('button', { name: '저주방 들어가기' }))
   await screen.findByRole('toolbar', { name: '저주방 도구' })
   return { user, created }
+}
+
+async function openExistingDollInCurseRoom() {
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(screen.getByRole('button', { name: /내 인형 보관함/ }))
+  await user.click(await screen.findByRole('button', { name: '열기' }))
+  await user.click(await screen.findByRole('button', { name: '저주방 들어가기' }))
+  await screen.findByRole('toolbar', { name: '저주방 도구' })
+  return user
+}
+
+async function openDollBurnDialog(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: '인형 태우기' }))
+  return screen.findByRole('dialog', { name: '인형 태우기' })
+}
+
+async function completeDollBurnHold(
+  user: ReturnType<typeof userEvent.setup>,
+  source: 'pointer' | 'Enter' | ' ' = 'pointer',
+) {
+  const frames = mockAnimationFrames()
+  const dialog = await openDollBurnDialog(user)
+  const holdButton = within(dialog).getByRole('button', { name: '1초간 눌러 인형 태우기' })
+  if (source === 'pointer') {
+    fireEvent.pointerDown(holdButton, { pointerId: 41 })
+  } else {
+    fireEvent.keyDown(holdButton, { key: source })
+  }
+  act(() => frames.runAt(1000))
+  return screen.findByTestId('doll-burn-effect')
 }
 
 function mockDollBounds() {
@@ -121,8 +154,7 @@ function mockAnimationFrames() {
 async function finishTalismanBurnAnimation() {
   await act(async () => {
     fireEvent.animationEnd(screen.getByTestId('talisman-burn-effect'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 50))
   })
 }
 
@@ -171,6 +203,35 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('그을림 이미지 레이어 CSS', () => {
+  it('필터와 가짜 얼룩 pseudo-element 없이 승인 이미지 opacity만 전환한다', () => {
+    expect(appStyles).not.toContain(".composite-doll[data-charred='true'] .composite-doll-base")
+    expect(appStyles).not.toContain(".composite-doll[data-charred='true']::after")
+    expect(appStyles).not.toMatch(/data-charred[^}]*filter\s*:/s)
+    expect(appStyles).toMatch(/\.composite-doll-charred\s*{[^}]*opacity:\s*0[^}]*transition:\s*opacity 250ms/s)
+    expect(appStyles).toMatch(/\.composite-doll\[data-charred='true'\] \.composite-doll-charred\s*{\s*opacity:\s*1;/)
+    expect(appStyles).toMatch(/\.composite-doll-base,\s*\.composite-doll-charred\s*{[^}]*z-index:\s*1[^}]*width:\s*100%[^}]*height:\s*100%[^}]*object-fit:\s*contain[^}]*object-position:\s*center/s)
+    expect(appStyles).toMatch(/\.face-layer\s*{[^}]*z-index:\s*2/s)
+    expect(appStyles).toMatch(/\.name-layer\s*{[^}]*z-index:\s*3/s)
+  })
+
+  it('불꽃 이미지와 컨테이너는 사각형 배경 없이 투명 배경과 drop-shadow만 사용한다', () => {
+    expect(appStyles).toMatch(/\.doll-burn-flames\s*{[^}]*background:\s*transparent/s)
+    expect(appStyles).toMatch(/\.doll-flame-layer\s*{[^}]*background:\s*transparent[^}]*filter:[^}]*drop-shadow/s)
+    expect(appStyles).not.toMatch(/\.doll-burn-flames\s*{[^}]*(?:background|background-color):\s*(?:black|#0{3,6}|rgb\(\s*0\s*,\s*0\s*,\s*0)/s)
+    expect(appStyles).not.toMatch(/\.doll-flame-layer\s*{[^}]*(?:background|background-color):\s*(?:black|#0{3,6}|rgb\(\s*0\s*,\s*0\s*,\s*0)/s)
+  })
+
+  it('태우기 흔들림은 인형 하단을 축으로 좌우 10도 안에서만 움직인다', () => {
+    expect(appStyles).toMatch(/\.doll-burn-motion-wrapper\s*{[^}]*transform-origin:\s*50% 100%/s)
+    const burnShake = appStyles.match(/@keyframes doll-burn-shake\s*{([\s\S]*?)\n}/)?.[1]
+    expect(burnShake).toContain('rotate(-10deg)')
+    expect(burnShake).toContain('rotate(10deg)')
+    expect(burnShake).not.toMatch(/rotate\(-?(?:1[1-9]|[2-9]\d)deg\)/)
+    expect(appStyles).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.doll-burn-motion-wrapper\.is-burning\s*{\s*animation:\s*none;/)
+  })
+})
+
 describe('시작 화면', () => {
   it('서비스 이름, 부제, 주요 시작 버튼과 승인된 인형 PNG를 렌더링한다', () => {
     render(<App />)
@@ -180,6 +241,10 @@ describe('시작 화면', () => {
     expect(screen.getByRole('button', { name: /새 인형 만들기/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /내 인형 보관함/ })).toBeInTheDocument()
     expect(screen.getAllByText('사진과 인형은 이 브라우저에만 저장됩니다')).toHaveLength(2)
+    expect(screen.queryByRole('link', { name: '속풀이 인형방 홈' })).not.toBeInTheDocument()
+    expect(screen.queryByText('마음이 복잡한 날, 조용히 들르는 곳')).not.toBeInTheDocument()
+    expect(screen.queryByText('오늘의 속마음은 안전해요')).not.toBeInTheDocument()
+    expect(screen.queryByText('당신만의 인형을 기다리고 있어요')).not.toBeInTheDocument()
     const dollImage = screen.getByRole('img', {
       name: '얼굴이 비어 있는 크림색 원피스를 입은 헝겊인형',
     })
@@ -197,12 +262,121 @@ describe('시작 화면', () => {
     expect(screen.getByRole('heading', { name: '속풀이 인형방' })).toBeInTheDocument()
   })
 
-  it('설정 버튼은 기존 준비 안내를 유지한다', async () => {
+  it('화면을 이동할 때 이전 스크롤 위치를 새 화면에 남기지 않는다', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    document.documentElement.scrollTop = 420
+    document.body.scrollTop = 420
+
+    await user.click(screen.getByRole('button', { name: '설정' }))
+
+    expect(document.documentElement.scrollTop).toBe(0)
+    expect(document.body.scrollTop).toBe(0)
+  })
+
+  it('설정 화면으로 이동해 저장 개수와 로컬 보관 안내를 표시하고 홈으로 돌아온다', async () => {
+    await createDoll({ name: '하나', faceBlob: new Blob(['1'], { type: 'image/webp' }) })
+    await createDoll({ name: '둘', faceBlob: new Blob(['2'], { type: 'image/webp' }) })
     const user = userEvent.setup()
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: '설정' }))
-    expect(screen.getByRole('status')).toHaveTextContent('설정은 다음 단계에서 제공됩니다')
+    expect(screen.getByRole('heading', { name: '설정' })).toBeInTheDocument()
+    expect(await screen.findByRole('status')).toHaveTextContent('2개 / 최대 5개')
+    expect(screen.getByText('사진과 인형 정보는 서버가 아니라 현재 브라우저에만 저장됩니다.')).toBeInTheDocument()
+    expect(screen.getByText(/브라우저 데이터를 삭제하거나 시크릿 모드를 사용하거나 다른 기기를 이용하면/)).toBeInTheDocument()
+    expect(screen.getByText('사용자 콘텐츠는 다른 사용자에게 공개되거나 공유되지 않습니다.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '← 홈으로' }))
+    expect(screen.getByRole('heading', { name: '속풀이 인형방' })).toBeInTheDocument()
+  })
+
+  it('설정 화면에서 Escape를 누르면 홈으로 돌아온다', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '설정' }))
+    await screen.findByRole('heading', { name: '설정' })
+
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('heading', { name: '속풀이 인형방' })).toBeInTheDocument()
+  })
+})
+
+describe('설정과 로컬 데이터 관리', () => {
+  it('전체 삭제 확인을 취소하면 저장 상태를 유지하고 삭제 버튼으로 포커스를 돌린다', async () => {
+    await createDoll({ name: '유지', faceBlob: new Blob(['face'], { type: 'image/webp' }) })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '설정' }))
+    const deleteButton = await screen.findByRole('button', { name: '모든 인형 삭제' })
+
+    await user.click(deleteButton)
+    const dialog = screen.getByRole('dialog', { name: '모든 인형을 삭제할까요?' })
+    expect(dialog).toHaveTextContent('저장된 인형과 모든 저주 상태가 삭제되며 복구할 수 없습니다.')
+    await user.click(within(dialog).getByRole('button', { name: '취소' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(deleteButton).toHaveFocus()
+    expect(await countDolls()).toBe(1)
+  })
+
+  it('전체 삭제를 확정하면 사진과 모든 상호작용 상태를 삭제하고 개수를 0개로 갱신한다', async () => {
+    const created = await createDoll({ name: '삭제', faceBlob: new Blob(['face'], { type: 'image/webp' }) })
+    await updateDoll(created.id, {
+      interactionState: {
+        pins: [{ id: 'pin-settings', x: 0.4, y: 0.5, angle: 12, createdAt: new Date().toISOString() }],
+        selectedCurse: 'mansabultong',
+        talismanStatus: 'attached',
+        charredUntil: new Date(Date.now() + 60_000).toISOString(),
+      },
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '설정' }))
+    await screen.findByText('1개 / 최대 5개')
+
+    await user.click(screen.getByRole('button', { name: '모든 인형 삭제' }))
+    const dialog = screen.getByRole('dialog', { name: '모든 인형을 삭제할까요?' })
+    await user.click(within(dialog).getByRole('button', { name: '모든 인형 삭제' }))
+
+    expect(await screen.findByText('0개 / 최대 5개')).toBeInTheDocument()
+    expect(screen.getByText('모든 인형과 저주 상태를 삭제했어요.')).toBeInTheDocument()
+    expect(await getAllDolls()).toEqual([])
+  })
+
+  it('전체 삭제 실패를 안내하고 중복 실행을 막은 뒤 다시 시도할 수 있다', async () => {
+    let rejectDelete!: (reason?: unknown) => void
+    const firstDelete = new Promise<void>((_resolve, reject) => {
+      rejectDelete = reject
+    })
+    const deleteStoredDolls = vi.fn()
+      .mockReturnValueOnce(firstDelete)
+      .mockResolvedValueOnce(undefined)
+    const user = userEvent.setup()
+    render(
+      <SettingsScreen
+        onHome={vi.fn()}
+        countStoredDolls={vi.fn().mockResolvedValue(1)}
+        deleteStoredDolls={deleteStoredDolls}
+      />,
+    )
+    await screen.findByText('1개 / 최대 5개')
+    await user.click(screen.getByRole('button', { name: '모든 인형 삭제' }))
+    const dialog = screen.getByRole('dialog', { name: '모든 인형을 삭제할까요?' })
+    const confirmButton = within(dialog).getByRole('button', { name: '모든 인형 삭제' })
+
+    await user.click(confirmButton)
+    expect(within(dialog).getByRole('button', { name: '삭제 중…' })).toBeDisabled()
+    await user.click(within(dialog).getByRole('button', { name: '삭제 중…' }))
+    expect(deleteStoredDolls).toHaveBeenCalledTimes(1)
+    rejectDelete(new Error('storage failure'))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('다시 시도해 주세요')
+    await user.click(within(dialog).getByRole('button', { name: '모든 인형 삭제' }))
+
+    expect(deleteStoredDolls).toHaveBeenCalledTimes(2)
+    expect(await screen.findByText('0개 / 최대 5개')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
 
@@ -649,6 +823,12 @@ describe('저주방', () => {
 
     expect(screen.getByRole('img', { name: '보관 여성형 헝겊인형' }))
       .toHaveAttribute('src', expect.stringContaining('doll-female-base-v1.png'))
+    const normalComposite = document.querySelector('.room-composite')
+    const charredLayer = normalComposite?.querySelector('.composite-doll-charred')
+    expect(normalComposite).not.toHaveAttribute('data-charred')
+    expect(charredLayer).toHaveAttribute('src', expect.stringContaining('doll-female-charred-v1.png'))
+    expect(charredLayer).toHaveAttribute('alt', '')
+    expect(charredLayer).toHaveAttribute('aria-hidden', 'true')
     await waitFor(() => {
       expect(document.querySelector('.room-face-image')).toHaveAttribute('src', expect.stringContaining('blob:'))
     })
@@ -759,6 +939,24 @@ describe('저주방', () => {
     expect(screen.queryByTestId('shake-cry')).not.toBeInTheDocument()
   })
 
+  it('흔들기 도구를 좌우 방향키로 조작하고 자동으로 중앙에 복귀한다', async () => {
+    const { user } = await openCurseRoomFromArchive('키보드')
+    await user.click(screen.getByRole('button', { name: '흔들기' }))
+    const dollArea = screen.getByRole('application', { name: /좌우 방향키로 흔드세요/ })
+    vi.useFakeTimers()
+
+    fireEvent.keyDown(dollArea, { key: 'ArrowLeft' })
+    expect(screen.getByTestId('room-doll-transform')).toHaveStyle({ transform: 'translateX(-48px) rotate(-8deg)' })
+    expect(screen.getByTestId('shake-cry')).toHaveClass('is-left')
+
+    act(() => vi.advanceTimersByTime(140))
+    expect(screen.getByTestId('room-doll-transform')).toHaveStyle({ transform: 'translateX(0px) rotate(0deg)' })
+    expect(screen.getByTestId('room-doll-transform')).toHaveClass('is-returning')
+
+    act(() => vi.advanceTimersByTime(480))
+    expect(screen.getByTestId('room-doll-transform')).not.toHaveClass('is-returning')
+  })
+
   it('흔드는 방향이 바뀔 때만 제한적으로 새 악! 글씨를 표시한다', async () => {
     const { user } = await openCurseRoomFromArchive('반전')
     await user.click(screen.getByRole('button', { name: '흔들기' }))
@@ -792,10 +990,327 @@ describe('저주방', () => {
     expect(screen.queryByTestId('shake-cry')).not.toBeInTheDocument()
   })
 
-  it('비활성 도구는 다음 단계 안내를 표시한다', async () => {
+  it('인형 태우기와 정화하기 도구가 실제 확인 대화상자를 연다', async () => {
     const { user } = await openCurseRoomFromArchive('준비')
     await user.click(screen.getByRole('button', { name: '인형 태우기' }))
-    expect(screen.getByText('다음 단계에서 제공됩니다')).toBeInTheDocument()
+    const burnDialog = screen.getByRole('dialog', { name: '인형 태우기' })
+    expect(within(burnDialog).getByText(/인형은 삭제되지 않으며/)).toBeInTheDocument()
+    await user.click(within(burnDialog).getByRole('button', { name: '취소' }))
+
+    await user.click(screen.getByRole('button', { name: '정화하기' }))
+    expect(screen.getByRole('dialog', { name: '인형 정화하기' })).toHaveTextContent('얼굴 사진과 이름, 인형 자체는 그대로 유지됩니다')
+  })
+})
+
+describe('인형 태우기', () => {
+  it('999ms에 놓으면 진행률과 저장 상태를 초기화하고 실행하지 않는다', async () => {
+    const { user, created } = await openCurseRoomFromArchive('중단')
+    const frames = mockAnimationFrames()
+    const dialog = await openDollBurnDialog(user)
+    const holdButton = within(dialog).getByRole('button', { name: '1초간 눌러 인형 태우기' })
+
+    fireEvent.pointerDown(holdButton, { pointerId: 1 })
+    act(() => frames.runAt(999))
+    expect(within(dialog).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '99')
+    fireEvent.pointerUp(holdButton, { pointerId: 1 })
+
+    expect(within(dialog).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
+    expect(screen.queryByTestId('doll-burn-effect')).not.toBeInTheDocument()
+    expect((await getDoll(created.id))?.interactionState.charredUntil).toBeNull()
+  })
+
+  it('1000ms 포인터 입력으로 ISO 만료 시각을 저장하고 별도 래퍼에서 연출한다', async () => {
+    const { user, created } = await openCurseRoomFromArchive('연소')
+    const beforeBurnRecord = await getDoll(created.id)
+    const before = Date.now()
+    const effect = await completeDollBurnHold(user)
+    const after = Date.now()
+
+    const stored = await getDoll(created.id)
+    expect(stored?.interactionState.charredUntil).toEqual(expect.any(String))
+    expect(Date.parse(stored?.interactionState.charredUntil ?? '')).toBeGreaterThan(before + 59_000)
+    expect(Date.parse(stored?.interactionState.charredUntil ?? '')).toBeLessThanOrEqual(after + 60_000)
+    expect(stored).toMatchObject({ id: created.id, name: created.name, createdAt: created.createdAt })
+    expect(stored?.faceBlob).toEqual(beforeBurnRecord?.faceBlob)
+
+    const charredDoll = document.querySelector('.room-composite')
+    expect(charredDoll).toHaveAttribute('data-charred', 'true')
+    const charredImage = charredDoll?.querySelector('.composite-doll-charred')
+    expect(charredImage).toHaveAttribute('src', expect.stringContaining('doll-female-charred-v1.png'))
+    expect(charredImage).toHaveAttribute('alt', '')
+    expect(charredImage).toHaveAttribute('aria-hidden', 'true')
+    const motionWrapper = screen.getByTestId('doll-burn-motion-wrapper')
+    const manualTransform = screen.getByTestId('room-doll-transform')
+    expect(motionWrapper).toHaveClass('is-burning')
+    expect(motionWrapper).toContainElement(manualTransform)
+    expect(manualTransform).toHaveStyle({ transform: 'translateX(0px) rotate(0deg)' })
+
+    const flames = Array.from(effect.querySelectorAll('img'))
+    expect(flames).toHaveLength(2)
+    flames.forEach((flame) => {
+      expect(flame).toHaveAttribute('src', expect.stringContaining('/assets/effects/talisman-flame-v1.png'))
+      expect(flame).toHaveAttribute('alt', '')
+      expect(flame).toHaveAttribute('aria-hidden', 'true')
+    })
+    within(screen.getByRole('toolbar', { name: '저주방 도구' }))
+      .getAllByRole('button')
+      .forEach((button) => expect(button).toBeDisabled())
+    expect(screen.getByText('인형이 화면 속에서 타오릅니다.')).toBeInTheDocument()
+
+    fireEvent.animationEnd(effect)
+    await waitFor(() => expect(screen.getByRole('button', { name: '바늘' })).toBeEnabled())
+    expect(screen.getByText('그을림은 1분 뒤 사라져요.')).toBeInTheDocument()
+    expect(charredDoll).toHaveAttribute('data-charred', 'true')
+  })
+
+  it.each([
+    ['Space', ' '],
+    ['Enter', 'Enter'],
+  ] as const)('%s 키를 1000ms 유지하면 실행한다', async (_label, key) => {
+    const { user, created } = await openCurseRoomFromArchive('키입력')
+    await completeDollBurnHold(user, key)
+
+    expect((await getDoll(created.id))?.interactionState.charredUntil).toEqual(expect.any(String))
+    expect(document.querySelector('.room-composite')).toHaveAttribute('data-charred', 'true')
+  })
+
+  it('저장 실패 시 불꽃과 그을림을 적용하지 않고 다시 누를 수 있게 복구한다', async () => {
+    const { user, created } = await openCurseRoomFromArchive('실패')
+    const frames = mockAnimationFrames()
+    const dialog = await openDollBurnDialog(user)
+    const holdButton = within(dialog).getByRole('button', { name: '1초간 눌러 인형 태우기' })
+    const originalIndexedDB = globalThis.indexedDB
+
+    fireEvent.pointerDown(holdButton, { pointerId: 2 })
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined })
+    await act(async () => {
+      frames.runAt(1000)
+      await Promise.resolve()
+    })
+    expect(await within(dialog).findByText(/이전 모습으로 유지됩니다/)).toBeInTheDocument()
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: originalIndexedDB })
+
+    expect(screen.queryByTestId('doll-burn-effect')).not.toBeInTheDocument()
+    expect(document.querySelector('.room-composite')).not.toHaveAttribute('data-charred')
+    expect(document.querySelector('.room-composite .composite-doll-charred'))
+      .toHaveAttribute('src', expect.stringContaining('doll-female-charred-v1.png'))
+    expect(within(dialog).getByRole('button', { name: '1초간 눌러 인형 태우기' })).toBeEnabled()
+    expect((await getDoll(created.id))?.interactionState.charredUntil).toBeNull()
+  })
+
+  it('재진입 시 남은 그을림을 복원하고 보관함 카드에도 표시한다', async () => {
+    const created = await createDoll({ name: '복원', faceBlob: new Blob(['face'], { type: 'image/webp' }) })
+    const charredUntil = new Date(Date.now() + 45_000).toISOString()
+    await updateDoll(created.id, {
+      interactionState: { ...created.interactionState, charredUntil },
+    })
+    const user = await openExistingDollInCurseRoom()
+
+    expect(document.querySelector('.room-composite')).toHaveAttribute('data-charred', 'true')
+    expect(screen.queryByTestId('doll-burn-effect')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '← 나가기' }))
+    const state = await screen.findByLabelText('복원 인형 상태')
+    expect(state).toHaveTextContent('그을림')
+    const archiveComposite = document.querySelector('.stored-doll-preview .composite-doll')
+    expect(archiveComposite).toHaveAttribute('data-charred', 'true')
+    const archiveCharredImage = archiveComposite?.querySelector('.composite-doll-charred')
+    expect(archiveCharredImage).toHaveAttribute('src', expect.stringContaining('doll-female-charred-v1.png'))
+    expect(archiveCharredImage).toHaveAttribute('alt', '')
+    expect(archiveCharredImage).toHaveAttribute('aria-hidden', 'true')
+    await waitFor(() => expect(archiveComposite?.querySelector('.face-layer img')).toBeInTheDocument())
+    expect(archiveComposite?.querySelector('.name-layer')).toHaveTextContent('복원')
+  })
+
+  it('만료된 그을림은 진입 즉시 화면과 IndexedDB에서 정리한다', async () => {
+    const created = await createDoll({ name: '만료', faceBlob: new Blob(['face'], { type: 'image/webp' }) })
+    await updateDoll(created.id, {
+      interactionState: {
+        ...created.interactionState,
+        charredUntil: new Date(Date.now() - 1_000).toISOString(),
+      },
+    })
+    await openExistingDollInCurseRoom()
+
+    expect(document.querySelector('.room-composite')).not.toHaveAttribute('data-charred')
+    expect(document.querySelector('.room-composite .composite-doll-base'))
+      .toHaveAttribute('src', expect.stringContaining('doll-female-base-v1.png'))
+    expect(screen.getByText('인형의 그을림이 사라졌어요.')).toBeInTheDocument()
+    await waitFor(async () => {
+      expect((await getDoll(created.id))?.interactionState.charredUntil).toBeNull()
+    })
+  })
+
+  it('비활성 탭에서 돌아오면 실제 현재 시각으로 만료를 다시 확인한다', async () => {
+    const created = await createDoll({ name: '탭복귀', faceBlob: new Blob(['face'], { type: 'image/webp' }) })
+    const expiresAt = Date.now() + 30_000
+    await updateDoll(created.id, {
+      interactionState: {
+        ...created.interactionState,
+        charredUntil: new Date(expiresAt).toISOString(),
+      },
+    })
+    await openExistingDollInCurseRoom()
+    expect(document.querySelector('.room-composite')).toHaveAttribute('data-charred', 'true')
+
+    vi.spyOn(Date, 'now').mockReturnValue(expiresAt + 1)
+    fireEvent(document, new Event('visibilitychange'))
+
+    await waitFor(async () => expect((await getDoll(created.id))?.interactionState.charredUntil).toBeNull())
+    expect(document.querySelector('.room-composite')).not.toHaveAttribute('data-charred')
+  })
+
+  it('보관함 카드는 만료된 그을림 값을 정상 상태로 처리한다', async () => {
+    const created = await createDoll({ name: '카드', faceBlob: new Blob(['face'], { type: 'image/webp' }) })
+    await updateDoll(created.id, {
+      interactionState: {
+        ...created.interactionState,
+        charredUntil: new Date(Date.now() - 1_000).toISOString(),
+      },
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: /내 인형 보관함/ }))
+
+    expect(await screen.findByLabelText('카드 인형 상태')).toHaveTextContent('깨끗함')
+    expect(document.querySelector('.stored-doll-preview .composite-doll')).not.toHaveAttribute('data-charred')
+  })
+
+  it('저장 시 설정한 60초 타이머가 화면과 IndexedDB를 자동 복구한다', async () => {
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
+    const { user, created } = await openCurseRoomFromArchive('자동')
+    await completeDollBurnHold(user)
+    const expiryCall = timeoutSpy.mock.calls.find(([, delay]) => (
+      typeof delay === 'number' && delay > 59_000 && delay <= 60_000
+    ))
+    expect(expiryCall).toBeDefined()
+    const storedExpiry = Date.parse((await getDoll(created.id))?.interactionState.charredUntil ?? '')
+    vi.spyOn(Date, 'now').mockReturnValue(storedExpiry)
+
+    await act(async () => {
+      const callback = expiryCall?.[0]
+      if (typeof callback === 'function') callback()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(document.querySelector('.room-composite')).not.toHaveAttribute('data-charred')
+    await waitFor(async () => expect((await getDoll(created.id))?.interactionState.charredUntil).toBeNull())
+    expect(screen.getByText('인형의 그을림이 사라졌어요.')).toBeInTheDocument()
+  })
+
+  it('화면 이탈 시 남은 그을림 타이머를 정리한다', async () => {
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+    const created = await createDoll({ name: '정리', faceBlob: new Blob(['face'], { type: 'image/webp' }) })
+    await updateDoll(created.id, {
+      interactionState: {
+        ...created.interactionState,
+        charredUntil: new Date(Date.now() + 50_000).toISOString(),
+      },
+    })
+    const user = await openExistingDollInCurseRoom()
+    const expiryIndex = timeoutSpy.mock.calls.findIndex(([, delay]) => typeof delay === 'number' && delay > 49_000)
+    const timerId = timeoutSpy.mock.results[expiryIndex]?.value
+
+    await user.click(screen.getByRole('button', { name: '← 나가기' }))
+
+    expect(expiryIndex).toBeGreaterThanOrEqual(0)
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timerId)
+  })
+
+  it('움직임 감소 환경에서도 저장과 불꽃 표시를 동일하게 실행한다', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)', media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(),
+      removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    })))
+    const { user, created } = await openCurseRoomFromArchive('감소')
+    const effect = await completeDollBurnHold(user)
+
+    expect(effect.querySelectorAll('img')).toHaveLength(2)
+    expect((await getDoll(created.id))?.interactionState.charredUntil).toEqual(expect.any(String))
+    expect(document.querySelector('.room-composite')).toHaveAttribute('data-charred', 'true')
+  })
+})
+
+describe('정화하기', () => {
+  const preparedPin: Pin = {
+    id: 'purify-pin', x: .5, y: .55, angle: 3, createdAt: '2026-08-31T00:00:00.000Z',
+  }
+
+  async function createPreparedDoll(name: string) {
+    const created = await createDoll({ name, faceBlob: new Blob(['kept-face'], { type: 'image/webp' }) })
+    return updateDoll(created.id, {
+      interactionState: {
+        pins: [preparedPin],
+        selectedCurse: 'mansabultong',
+        talismanStatus: 'attached',
+        charredUntil: new Date(Date.now() + 50_000).toISOString(),
+      },
+    })
+  }
+
+  it('취소와 Escape는 아무 상태도 바꾸지 않고 정화 버튼으로 포커스를 돌린다', async () => {
+    const prepared = await createPreparedDoll('취소')
+    const user = await openExistingDollInCurseRoom()
+    const purifyButton = screen.getByRole('button', { name: '정화하기' })
+    await user.click(purifyButton)
+    const dialog = screen.getByRole('dialog', { name: '인형 정화하기' })
+    await user.click(within(dialog).getByRole('button', { name: '취소' }))
+    await waitFor(() => expect(purifyButton).toHaveFocus())
+    expect((await getDoll(prepared.id))?.interactionState).toEqual(prepared.interactionState)
+
+    await user.click(purifyButton)
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '인형 정화하기' })).not.toBeInTheDocument()
+    await waitFor(() => expect(purifyButton).toHaveFocus())
+    expect((await getDoll(prepared.id))?.interactionState).toEqual(prepared.interactionState)
+  })
+
+  it('확정 시 상호작용만 한 번에 초기화하고 얼굴·이름·ID와 인형 레코드를 유지한다', async () => {
+    const prepared = await createPreparedDoll('정화')
+    const user = await openExistingDollInCurseRoom()
+    const putSpy = vi.spyOn(IDBObjectStore.prototype, 'put')
+    await user.click(screen.getByRole('button', { name: '정화하기' }))
+    const confirm = within(screen.getByRole('dialog', { name: '인형 정화하기' }))
+      .getByRole('button', { name: '모두 정화하기' })
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+
+    expect(await screen.findByText('인형을 깨끗하게 정화했어요.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: '정화하기' })).not.toBeDisabled())
+    expect(putSpy).toHaveBeenCalledTimes(1)
+    const stored = await getDoll(prepared.id)
+    expect(stored?.interactionState).toEqual({
+      pins: [], selectedCurse: null, talismanStatus: null, charredUntil: null,
+    })
+    expect(stored).toMatchObject({ id: prepared.id, name: prepared.name, createdAt: prepared.createdAt })
+    expect(stored?.faceBlob).toEqual(prepared.faceBlob)
+    expect(screen.queryByRole('button', { name: '정화 인형의 바늘 제거' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: '만사불통 부적' })).not.toBeInTheDocument()
+    expect(document.querySelector('.room-composite')).not.toHaveAttribute('data-charred')
+    expect(document.querySelector('.room-composite .composite-doll-base'))
+      .toHaveAttribute('src', expect.stringContaining('doll-female-base-v1.png'))
+    expect(screen.queryByTestId('shake-cry')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '← 나가기' }))
+    expect(await screen.findByLabelText('정화 인형 상태')).toHaveTextContent('깨끗함')
+  })
+
+  it('저장 실패 시 화면과 저장된 상호작용 상태를 모두 유지한다', async () => {
+    const prepared = await createPreparedDoll('실패')
+    const user = await openExistingDollInCurseRoom()
+    await user.click(screen.getByRole('button', { name: '정화하기' }))
+    const dialog = screen.getByRole('dialog', { name: '인형 정화하기' })
+    const originalIndexedDB = globalThis.indexedDB
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined })
+    fireEvent.click(within(dialog).getByRole('button', { name: '모두 정화하기' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('기존 상태는 그대로 유지됩니다')
+    Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: originalIndexedDB })
+
+    expect((await getDoll(prepared.id))?.interactionState).toEqual(prepared.interactionState)
+    expect(screen.getByRole('button', { name: '실패 인형의 바늘 제거' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '만사불통 부적' })).toBeInTheDocument()
+    expect(document.querySelector('.room-composite')).toHaveAttribute('data-charred', 'true')
   })
 })
 
@@ -1099,6 +1614,7 @@ describe('통합 주문과 부적 태우기', () => {
     expect(roomChant).toHaveAttribute('role', 'status')
     expect(roomChant).toHaveAttribute('aria-live', 'polite')
     expect(screen.getByText('만사불통의 기운이 최고조로 치솟습니다.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '정화하기' })).toBeDisabled()
     expect(screen.queryByTestId('chant-burst')).not.toBeInTheDocument()
     expect(maximumEffect).toBeInTheDocument()
   })

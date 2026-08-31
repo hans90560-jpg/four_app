@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DOLL_LIMIT_MESSAGE,
+  DOLL_DATABASE_VERSION,
   MAX_DOLLS,
   countDolls,
   createDoll,
@@ -11,6 +12,7 @@ import {
   markDollUsed,
   renameDoll,
   updateDoll,
+  type DollInteractionState,
 } from '../src/dollDatabase'
 
 const faceBlob = () => new Blob(['webp-face'], { type: 'image/webp' })
@@ -20,6 +22,20 @@ beforeEach(async () => {
 })
 
 describe('IndexedDB 인형 저장소', () => {
+  it('데이터베이스 버전 1을 유지하고 기존 레코드의 누락된 그을림 값을 null로 정규화한다', async () => {
+    expect(DOLL_DATABASE_VERSION).toBe(1)
+    const created = await createDoll({ name: '기존', faceBlob: faceBlob() })
+    const legacyState = {
+      pins: [],
+      selectedCurse: null,
+      talismanStatus: null,
+    } as unknown as DollInteractionState
+
+    await updateDoll(created.id, { interactionState: legacyState })
+
+    expect((await getDoll(created.id))?.interactionState.charredUntil).toBeNull()
+  })
+
   it('인형을 생성하고 ID로 조회한다', async () => {
     const created = await createDoll({ name: ' 김아무 ', faceBlob: faceBlob() })
     const stored = await getDoll(created.id)

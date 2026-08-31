@@ -9,6 +9,7 @@ import {
   type PointerEvent,
 } from 'react'
 import dollFemaleBase from '../assets/characters/doll-female-base-v1.png'
+import dollFemaleCharred from '../assets/characters/doll-female-charred-v1.png'
 import needleImage from '../assets/tools/needle-v1.png'
 import {
   getDoll,
@@ -32,6 +33,13 @@ import {
   TalismanBurnDialog,
   TalismanBurnEffect,
 } from './CurseActions'
+import {
+  CHARRED_DURATION_MS,
+  DOLL_BURN_EFFECT_MS,
+  DollBurnDialog,
+  DollBurnEffect,
+  PurifyDialog,
+} from './DollRituals'
 
 const ROOM_COMPOSITE_STYLE = {
   '--face-left': '30%',
@@ -128,6 +136,15 @@ export default function CurseRoom({
   const [isBurnConfirmationOpen, setIsBurnConfirmationOpen] = useState(false)
   const [isTalismanBurning, setIsTalismanBurning] = useState(false)
   const [burnChant, setBurnChant] = useState('')
+  const [isDollBurnDialogOpen, setIsDollBurnDialogOpen] = useState(false)
+  const [isDollBurnSaving, setIsDollBurnSaving] = useState(false)
+  const [dollBurnError, setDollBurnError] = useState('')
+  const [dollBurnResetToken, setDollBurnResetToken] = useState(0)
+  const [isDollBurning, setIsDollBurning] = useState(false)
+  const [isCharred, setIsCharred] = useState(false)
+  const [isPurifyDialogOpen, setIsPurifyDialogOpen] = useState(false)
+  const [isPurifying, setIsPurifying] = useState(false)
+  const [purifyError, setPurifyError] = useState('')
   const faceUrl = useBlobObjectUrl(doll?.faceBlob ?? null)
   const attachedCurseId = doll?.interactionState.talismanStatus === 'attached'
     ? doll.interactionState.selectedCurse
@@ -151,7 +168,12 @@ export default function CurseRoom({
   const motionTimerRef = useRef<number | null>(null)
   const effectTimerRef = useRef<number | null>(null)
   const burnTimerRef = useRef<number | null>(null)
+  const dollBurnTimerRef = useRef<number | null>(null)
+  const charredTimerRef = useRef<number | null>(null)
+  const charredUntilRef = useRef<string | null>(null)
   const burnSaveRef = useRef(false)
+  const dollBurnSaveRef = useRef(false)
+  const purifySaveRef = useRef(false)
   const talismanSaveRef = useRef(false)
   const talismanButtonRef = useRef<HTMLButtonElement>(null)
   const talismanDialogRef = useRef<HTMLElement>(null)
@@ -160,6 +182,10 @@ export default function CurseRoom({
   const spellDialogRef = useRef<HTMLElement>(null)
   const burnDialogRef = useRef<HTMLElement>(null)
   const burnButtonRef = useRef<HTMLButtonElement>(null)
+  const dollBurnDialogRef = useRef<HTMLElement>(null)
+  const dollBurnButtonRef = useRef<HTMLButtonElement>(null)
+  const purifyDialogRef = useRef<HTMLElement>(null)
+  const purifyButtonRef = useRef<HTMLButtonElement>(null)
   const roomPageRef = useRef<HTMLDivElement>(null)
 
   const clearShakeCries = useCallback(() => {
@@ -180,6 +206,63 @@ export default function CurseRoom({
     shakeCryTimersRef.current.set(id, timer)
   }, [])
 
+  const clearCharredTimer = useCallback(() => {
+    if (charredTimerRef.current !== null) {
+      window.clearTimeout(charredTimerRef.current)
+      charredTimerRef.current = null
+    }
+  }, [])
+
+  const clearExpiredCharred = useCallback(async (announce = true) => {
+    clearCharredTimer()
+    charredUntilRef.current = null
+    setIsCharred(false)
+    setDoll((current) => current ? {
+      ...current,
+      interactionState: { ...current.interactionState, charredUntil: null },
+    } : current)
+    if (announce) setNotice('인형의 그을림이 사라졌어요.')
+
+    try {
+      const latest = await getDoll(dollId)
+      if (!latest || latest.interactionState.charredUntil === null) return
+      const updated = await updateDoll(dollId, {
+        interactionState: { ...latest.interactionState, charredUntil: null },
+      })
+      if (mountedRef.current) {
+        setDoll(updated)
+        setSaveStatus('saved')
+      }
+    } catch {
+      if (mountedRef.current) {
+        setSaveStatus('error')
+        setNotice(announce
+          ? '인형의 그을림이 사라졌어요. 저장값 정리는 다음 방문에 다시 시도합니다.'
+          : '만료된 그을림 저장값을 정리하지 못했어요.')
+      }
+    }
+  }, [clearCharredTimer, dollId])
+
+  const scheduleCharredExpiry = useCallback((charredUntil: string) => {
+    clearCharredTimer()
+    charredUntilRef.current = charredUntil
+    const remaining = Date.parse(charredUntil) - Date.now()
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      void clearExpiredCharred(true)
+      return
+    }
+    setIsCharred(true)
+    const expireAtCurrentTime = () => {
+      const nextRemaining = Date.parse(charredUntil) - Date.now()
+      if (nextRemaining > 0) {
+        charredTimerRef.current = window.setTimeout(expireAtCurrentTime, nextRemaining)
+        return
+      }
+      void clearExpiredCharred(true)
+    }
+    charredTimerRef.current = window.setTimeout(expireAtCurrentTime, remaining)
+  }, [clearCharredTimer, clearExpiredCharred])
+
   useEffect(() => {
     mountedRef.current = true
     let active = true
@@ -195,6 +278,15 @@ export default function CurseRoom({
         confirmedPinsRef.current = restoredPins
         setPins(restoredPins)
         setDoll(record)
+        const charredUntil = record.interactionState.charredUntil
+        if (charredUntil && Date.parse(charredUntil) > Date.now()) {
+          scheduleCharredExpiry(charredUntil)
+        } else if (charredUntil) {
+          void clearExpiredCharred(true)
+        } else {
+          charredUntilRef.current = null
+          setIsCharred(false)
+        }
       })
       .catch(() => {
         if (active) setLoadError('인형을 불러오지 못했어요. 삭제되었거나 보관함을 사용할 수 없어요.')
@@ -207,10 +299,25 @@ export default function CurseRoom({
       if (motionTimerRef.current !== null) window.clearTimeout(motionTimerRef.current)
       if (effectTimerRef.current !== null) window.clearTimeout(effectTimerRef.current)
       if (burnTimerRef.current !== null) window.clearTimeout(burnTimerRef.current)
+      if (dollBurnTimerRef.current !== null) window.clearTimeout(dollBurnTimerRef.current)
+      clearCharredTimer()
       shakeCryTimersRef.current.forEach((timer) => window.clearTimeout(timer))
       shakeCryTimersRef.current.clear()
     }
-  }, [dollId])
+  }, [clearCharredTimer, clearExpiredCharred, dollId, scheduleCharredExpiry])
+
+  useEffect(() => {
+    const checkCharredExpiry = () => {
+      if (document.visibilityState === 'hidden' || !charredUntilRef.current) return
+      if (Date.parse(charredUntilRef.current) <= Date.now()) {
+        void clearExpiredCharred(true)
+      } else {
+        scheduleCharredExpiry(charredUntilRef.current)
+      }
+    }
+    document.addEventListener('visibilitychange', checkCharredExpiry)
+    return () => document.removeEventListener('visibilitychange', checkCharredExpiry)
+  }, [clearExpiredCharred, scheduleCharredExpiry])
 
   useEffect(() => {
     if (activeTool !== 'shake') clearShakeCries()
@@ -385,6 +492,70 @@ export default function CurseRoom({
     }
   }, [isBurnConfirmationOpen])
 
+  useEffect(() => {
+    if (!isDollBurnDialogOpen) return
+    const dialog = dollBurnDialogRef.current
+    roomPageRef.current?.setAttribute('inert', '')
+    dialog?.querySelector<HTMLButtonElement>('.doll-burn-hold-button')?.focus()
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && !dollBurnSaveRef.current) {
+        event.preventDefault()
+        setIsDollBurnDialogOpen(false)
+        return
+      }
+      if (event.key !== 'Tab' || !dialog) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled)'))
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      roomPageRef.current?.removeAttribute('inert')
+      dollBurnButtonRef.current?.focus()
+    }
+  }, [isDollBurnDialogOpen])
+
+  useEffect(() => {
+    if (!isPurifyDialogOpen) return
+    const dialog = purifyDialogRef.current
+    roomPageRef.current?.setAttribute('inert', '')
+    dialog?.querySelector<HTMLButtonElement>('button')?.focus()
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && !purifySaveRef.current) {
+        event.preventDefault()
+        setIsPurifyDialogOpen(false)
+        return
+      }
+      if (event.key !== 'Tab' || !dialog) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled)'))
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      roomPageRef.current?.removeAttribute('inert')
+      purifyButtonRef.current?.focus()
+    }
+  }, [isPurifyDialogOpen])
+
   const openTalismanPanel = () => {
     if (isTalismanBurning) return
     const attachedCurse = getCurseById(attachedCurseId)
@@ -490,6 +661,127 @@ export default function CurseRoom({
 
     if (burnTimerRef.current !== null) window.clearTimeout(burnTimerRef.current)
     burnTimerRef.current = window.setTimeout(() => void finishTalismanBurn(), TALISMAN_BURN_DURATION_MS)
+  }
+
+  const finishDollBurnEffect = useCallback(() => {
+    if (dollBurnTimerRef.current !== null) {
+      window.clearTimeout(dollBurnTimerRef.current)
+      dollBurnTimerRef.current = null
+    }
+    if (mountedRef.current) {
+      setIsDollBurning(false)
+      setNotice('그을림은 1분 뒤 사라져요.')
+    }
+  }, [])
+
+  const startDollBurn = async () => {
+    if (dollBurnSaveRef.current || isDollBurning || isTalismanBurning) return
+    dollBurnSaveRef.current = true
+    setIsDollBurnSaving(true)
+    setDollBurnError('')
+    setSaveStatus('saving')
+    const startedAt = Date.now()
+    const charredUntil = new Date(startedAt + CHARRED_DURATION_MS).toISOString()
+
+    try {
+      const latest = await getDoll(dollId)
+      if (!latest) throw new Error('not-found')
+      const updated = await updateDoll(dollId, {
+        interactionState: { ...latest.interactionState, charredUntil },
+        lastUsedAt: new Date(startedAt).toISOString(),
+      })
+      if (!mountedRef.current) return
+
+      setDoll(updated)
+      setActiveTool(null)
+      dragRef.current = null
+      setShakeX(0)
+      setShakeAngle(0)
+      setIsReturning(false)
+      clearShakeCries()
+      scheduleCharredExpiry(charredUntil)
+      setIsDollBurnDialogOpen(false)
+      setIsDollBurning(true)
+      setSaveStatus('saved')
+      setNotice('인형이 화면 속에서 타오릅니다.')
+      if (dollBurnTimerRef.current !== null) window.clearTimeout(dollBurnTimerRef.current)
+      dollBurnTimerRef.current = window.setTimeout(finishDollBurnEffect, DOLL_BURN_EFFECT_MS)
+    } catch {
+      if (!mountedRef.current) return
+      setSaveStatus('error')
+      setDollBurnError('그을림 상태를 저장하지 못했어요. 인형은 이전 모습으로 유지됩니다.')
+      setNotice('인형 태우기를 저장하지 못했어요. 이전 상태를 유지합니다.')
+      setDollBurnResetToken((current) => current + 1)
+    } finally {
+      dollBurnSaveRef.current = false
+      if (mountedRef.current) setIsDollBurnSaving(false)
+    }
+  }
+
+  const purifyDoll = async () => {
+    if (purifySaveRef.current || isDollBurning || isTalismanBurning) return
+    purifySaveRef.current = true
+    setIsPurifying(true)
+    setPurifyError('')
+    setSaveStatus('saving')
+
+    try {
+      await saveQueueRef.current.catch(() => undefined)
+      const latest = await getDoll(dollId)
+      if (!latest) throw new Error('not-found')
+      const updated = await updateDoll(dollId, {
+        interactionState: {
+          pins: [],
+          selectedCurse: null,
+          talismanStatus: null,
+          charredUntil: null,
+        },
+        lastUsedAt: new Date().toISOString(),
+      })
+      if (!mountedRef.current) return
+
+      saveVersionRef.current += 1
+      pinsRef.current = []
+      confirmedPinsRef.current = []
+      setPins([])
+      setDoll(updated)
+      setSelectedCurseId(null)
+      setReplacementCurseId(null)
+      setEffectCurseId(null)
+      setEffectIntensity('normal')
+      setBurnChant('')
+      setIsCharred(false)
+      charredUntilRef.current = null
+      clearCharredTimer()
+      if (sparkleTimerRef.current !== null) window.clearTimeout(sparkleTimerRef.current)
+      if (motionTimerRef.current !== null) window.clearTimeout(motionTimerRef.current)
+      if (effectTimerRef.current !== null) window.clearTimeout(effectTimerRef.current)
+      if (dollBurnTimerRef.current !== null) window.clearTimeout(dollBurnTimerRef.current)
+      setSparkle(null)
+      setIsFlinching(false)
+      dragRef.current = null
+      setShakeX(0)
+      setShakeAngle(0)
+      setIsReturning(false)
+      clearShakeCries()
+      setActiveTool(null)
+      setIsTalismanPanelOpen(false)
+      setIsAttachedPanelOpen(false)
+      setIsBurnConfirmationOpen(false)
+      setIsSpellPanelOpen(false)
+      setIsCasting(false)
+      setIsPurifyDialogOpen(false)
+      setSaveStatus('saved')
+      setNotice('인형을 깨끗하게 정화했어요.')
+    } catch {
+      if (!mountedRef.current) return
+      setSaveStatus('error')
+      setPurifyError('정화 상태를 저장하지 못했어요. 기존 상태는 그대로 유지됩니다.')
+      setNotice('정화하기를 저장하지 못했어요. 기존 상태를 유지합니다.')
+    } finally {
+      purifySaveRef.current = false
+      if (mountedRef.current) setIsPurifying(false)
+    }
   }
 
   const openBurnSpell = () => {
@@ -627,6 +919,27 @@ export default function CurseRoom({
   }
 
   const handleDollKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (activeTool === 'shake') {
+      if ((event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') || event.repeat) return
+      event.preventDefault()
+      const direction: ShakeDirection = event.key === 'ArrowLeft' ? 'left' : 'right'
+      const sign = direction === 'left' ? -1 : 1
+      if (motionTimerRef.current !== null) window.clearTimeout(motionTimerRef.current)
+      setIsReturning(false)
+      setShakeX(sign * 48)
+      setShakeAngle(sign * 8)
+      showShakeCry(direction)
+      motionTimerRef.current = window.setTimeout(() => {
+        if (!mountedRef.current) return
+        setIsReturning(true)
+        setShakeX(0)
+        setShakeAngle(0)
+        motionTimerRef.current = window.setTimeout(() => {
+          if (mountedRef.current) setIsReturning(false)
+        }, 480)
+      }, 140)
+      return
+    }
     if (activeTool !== 'needle') return
     const movement: Record<string, { x: number; y: number }> = {
       ArrowLeft: { x: -.03, y: 0 },
@@ -732,6 +1045,9 @@ export default function CurseRoom({
   }
 
   const saveLabel = saveStatus === 'saving' ? '저장 중' : saveStatus === 'error' ? '저장 실패' : '저장됨'
+  const interactionLocked = isDollBurning || isDollBurnSaving || isPurifying
+  const dollBurnUnavailable = interactionLocked || isTalismanBurning
+  const purifyUnavailable = interactionLocked || isTalismanBurning
 
   return (
     <div className="curse-room-shell">
@@ -749,15 +1065,30 @@ export default function CurseRoom({
         <section className="curse-room-stage" aria-label={`${doll.name} 인형 상호작용 영역`}>
           <div className="room-paper-halo" aria-hidden="true" />
           <div
-            className={`room-doll-transform${isFlinching ? ' is-flinching' : ''}${isReturning ? ' is-returning' : ''}`}
-            data-testid="room-doll-transform"
-            style={{ transform: `translateX(${shakeX}px) rotate(${shakeAngle}deg)` }}
+            className={`doll-burn-motion-wrapper${isDollBurning ? ' is-burning' : ''}`}
+            data-testid="doll-burn-motion-wrapper"
           >
-            <div className="composite-doll room-composite" style={ROOM_COMPOSITE_STYLE}>
+            <div
+              className={`room-doll-transform${isFlinching ? ' is-flinching' : ''}${isReturning ? ' is-returning' : ''}`}
+              data-testid="room-doll-transform"
+              style={{ transform: `translateX(${shakeX}px) rotate(${shakeAngle}deg)` }}
+            >
+              <div
+                className="composite-doll room-composite"
+                style={ROOM_COMPOSITE_STYLE}
+                data-charred={isCharred ? 'true' : undefined}
+              >
               <img
                 className="composite-doll-base"
                 src={dollFemaleBase}
                 alt={`${doll.name} 여성형 헝겊인형`}
+                draggable={false}
+              />
+              <img
+                className="composite-doll-charred"
+                src={dollFemaleCharred}
+                alt=""
+                aria-hidden="true"
                 draggable={false}
               />
               <div className="face-layer" aria-hidden="true">
@@ -781,7 +1112,7 @@ export default function CurseRoom({
                 aria-label={activeTool === 'needle'
                   ? '인형 바늘 위치 선택. 방향키로 위치를 움직이고 Enter 또는 Space로 바늘을 꽂습니다.'
                   : activeTool === 'shake'
-                    ? '인형 흔들기 영역. 포인터로 잡아 좌우로 움직이세요.'
+                    ? '인형 흔들기 영역. 포인터로 잡아 움직이거나 좌우 방향키로 흔드세요.'
                     : '인형 영역. 먼저 아래에서 도구를 선택하세요.'}
                 onClick={handleDollClick}
                 onKeyDown={handleDollKeyDown}
@@ -808,6 +1139,7 @@ export default function CurseRoom({
                       '--pin-angle': `${pin.angle}deg`,
                     } as CSSProperties}
                     aria-label={`${doll.name} 인형의 바늘 제거`}
+                    disabled={interactionLocked}
                     onClick={(event) => {
                       event.stopPropagation()
                       queuePinsSave(pinsRef.current.filter((candidate) => candidate.id !== pin.id))
@@ -834,7 +1166,9 @@ export default function CurseRoom({
                   style={{ '--shake-cry-index': index } as CSSProperties}
                 >악!</span>
               ))}
+              </div>
             </div>
+            {isDollBurning && <DollBurnEffect onComplete={finishDollBurnEffect} />}
           </div>
           {burnChant && (
             <p className="room-burn-chant" role="status" aria-live="polite" aria-atomic="true">
@@ -852,30 +1186,50 @@ export default function CurseRoom({
             <div className="needle-actions">
               <button
                 type="button"
-                disabled={activeTool !== 'needle'}
+                disabled={activeTool !== 'needle' || interactionLocked}
                 onClick={() => addPinAt(.5, .55)}
               >인형 중앙에 바늘 꽂기</button>
               <button
                 type="button"
-                disabled={pins.length === 0}
+                disabled={pins.length === 0 || interactionLocked}
                 onClick={() => queuePinsSave([])}
               >바늘 모두 빼기</button>
             </div>
           </div>
 
           <div className="room-tools" role="toolbar" aria-label="저주방 도구">
-            <button type="button" className={activeTool === 'needle' ? 'is-selected' : ''} aria-pressed={activeTool === 'needle'} onClick={() => { setActiveTool('needle'); setNotice('인형 안쪽을 누르거나 키보드로 위치를 정해 바늘을 꽂아보세요.') }}><span aria-hidden="true">✦</span>바늘</button>
-            <button type="button" className={activeTool === 'shake' ? 'is-selected' : ''} aria-pressed={activeTool === 'shake'} onClick={() => { setActiveTool('shake'); setNotice('인형을 잡고 좌우로 흔들어보세요.') }}><span aria-hidden="true">↔</span>흔들기</button>
+            <button type="button" disabled={interactionLocked} className={activeTool === 'needle' ? 'is-selected' : ''} aria-pressed={activeTool === 'needle'} onClick={() => { setActiveTool('needle'); setNotice('인형 안쪽을 누르거나 키보드로 위치를 정해 바늘을 꽂아보세요.') }}><span aria-hidden="true">✦</span>바늘</button>
+            <button type="button" disabled={interactionLocked} className={activeTool === 'shake' ? 'is-selected' : ''} aria-pressed={activeTool === 'shake'} onClick={() => { setActiveTool('shake'); setNotice('인형을 잡고 좌우로 흔들어보세요.') }}><span aria-hidden="true">↔</span>흔들기</button>
             <button
               type="button"
               ref={talismanButtonRef}
               className={activeTool === 'talisman' ? 'is-selected' : ''}
               aria-pressed={activeTool === 'talisman'}
-              disabled={isTalismanBurning}
+              disabled={interactionLocked || isTalismanBurning}
               onClick={openTalismanPanel}
             ><span aria-hidden="true">▤</span>부적</button>
-            <button type="button" aria-pressed="false" onClick={() => setNotice('다음 단계에서 제공됩니다')}><span aria-hidden="true">◇</span>인형 태우기</button>
-            <button type="button" aria-pressed="false" onClick={() => setNotice('다음 단계에서 제공됩니다')}><span aria-hidden="true">◇</span>정화하기</button>
+            <button
+              type="button"
+              ref={dollBurnButtonRef}
+              aria-pressed="false"
+              disabled={dollBurnUnavailable}
+              onClick={() => {
+                setDollBurnError('')
+                setDollBurnResetToken((current) => current + 1)
+                setIsDollBurnDialogOpen(true)
+              }}
+            ><span aria-hidden="true">♨</span>인형 태우기</button>
+            <button
+              type="button"
+              ref={purifyButtonRef}
+              className="purify-tool-button"
+              aria-pressed="false"
+              disabled={purifyUnavailable}
+              onClick={() => {
+                setPurifyError('')
+                setIsPurifyDialogOpen(true)
+              }}
+            ><span aria-hidden="true">◇</span>정화하기</button>
           </div>
           <p className="room-notice" role={saveStatus === 'error' ? 'alert' : 'status'} aria-live="polite">{notice}</p>
         </section>
@@ -947,6 +1301,31 @@ export default function CurseRoom({
           busy={isTalismanBurning}
           onCancel={() => setIsBurnConfirmationOpen(false)}
           onConfirm={openBurnSpell}
+        />
+      )}
+
+      {isDollBurnDialogOpen && (
+        <DollBurnDialog
+          dialogRef={dollBurnDialogRef}
+          busy={isDollBurnSaving}
+          error={dollBurnError}
+          resetToken={dollBurnResetToken}
+          onCancel={() => {
+            if (!dollBurnSaveRef.current) setIsDollBurnDialogOpen(false)
+          }}
+          onComplete={() => void startDollBurn()}
+        />
+      )}
+
+      {isPurifyDialogOpen && (
+        <PurifyDialog
+          dialogRef={purifyDialogRef}
+          busy={isPurifying}
+          error={purifyError}
+          onCancel={() => {
+            if (!purifySaveRef.current) setIsPurifyDialogOpen(false)
+          }}
+          onConfirm={() => void purifyDoll()}
         />
       )}
     </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import dollFemaleBase from '../assets/characters/doll-female-base-v1.png'
+import dollFemaleCharred from '../assets/characters/doll-female-charred-v1.png'
 import {
   MAX_DOLLS,
   deleteAllDolls,
@@ -47,14 +48,28 @@ function useBlobObjectUrl(blob: Blob | null): string {
 function StoredDollPreview({ doll, large = false }: { doll: DollRecord | null; large?: boolean }) {
   const faceUrl = useBlobObjectUrl(doll?.faceBlob ?? null)
   const name = doll?.name ?? ''
+  const isCharred = Boolean(
+    doll?.interactionState.charredUntil
+    && Date.parse(doll.interactionState.charredUntil) > Date.now(),
+  )
 
   return (
     <div className={`stored-doll-preview${large ? ' is-large' : ''}`}>
-      <div className="composite-doll" style={STORED_COMPOSITE_STYLE}>
+      <div
+        className="composite-doll"
+        style={STORED_COMPOSITE_STYLE}
+        data-charred={isCharred ? 'true' : undefined}
+      >
         <img
           className="composite-doll-base"
           src={dollFemaleBase}
           alt={doll ? `${doll.name} 인형 미리보기` : '얼굴이 비어 있는 여성형 헝겊인형'}
+        />
+        <img
+          className="composite-doll-charred"
+          src={dollFemaleCharred}
+          alt=""
+          aria-hidden="true"
         />
         <div className="face-layer" aria-hidden="true">
           {faceUrl && <img className="stored-face-image" src={faceUrl} alt="" />}
@@ -340,6 +355,18 @@ export default function DollArchive({
                   <StoredDollPreview doll={doll} />
                   <h2>{doll.name}</h2>
                   <p>마지막 사용 {formatLastUsedAt(doll.lastUsedAt)}</p>
+                  <div className="interaction-state-badges" aria-label={`${doll.name} 인형 상태`}>
+                    {doll.interactionState.pins.length > 0 && <span>바늘 {doll.interactionState.pins.length}</span>}
+                    {doll.interactionState.talismanStatus === 'attached' && <span>부적</span>}
+                    {doll.interactionState.charredUntil
+                      && Date.parse(doll.interactionState.charredUntil) > Date.now()
+                      && <span>그을림</span>}
+                    {doll.interactionState.pins.length === 0
+                      && doll.interactionState.talismanStatus === null
+                      && (!doll.interactionState.charredUntil
+                        || Date.parse(doll.interactionState.charredUntil) <= Date.now())
+                      && <span>깨끗함</span>}
+                  </div>
                   <div className="doll-card-actions">
                     <button
                       type="button"

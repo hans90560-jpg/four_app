@@ -3,6 +3,7 @@ import dollFemaleBase from '../assets/characters/doll-female-base-v1.png'
 import DollArchive, { DollDetail } from './DollArchive'
 import DollMaker from './DollMaker'
 import CurseRoom from './CurseRoom'
+import SettingsScreen from './SettingsScreen'
 import {
   DOLL_LIMIT_MESSAGE,
   MAX_DOLLS,
@@ -23,7 +24,7 @@ function WorkshopDecor() {
 }
 
 function App() {
-  const [screen, setScreen] = useState<'home' | 'maker' | 'archive' | 'detail' | 'curse-room'>('home')
+  const [screen, setScreen] = useState<'home' | 'maker' | 'archive' | 'detail' | 'curse-room' | 'settings'>('home')
   const [openedDoll, setOpenedDoll] = useState<DollRecord | null>(null)
   const [curseRoomDollId, setCurseRoomDollId] = useState('')
   const [notice, setNotice] = useState('')
@@ -33,6 +34,11 @@ function App() {
   const infoButtonRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLElement>(null)
   const pageRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    document.documentElement.scrollTop = 0
+    document.body.scrollTop = 0
+  }, [screen])
 
   useEffect(() => {
     if (!isInfoOpen) return
@@ -73,8 +79,6 @@ function App() {
       ;(previouslyFocused ?? infoButtonRef.current)?.focus()
     }
   }, [isInfoOpen])
-
-  const showSettingsNotice = () => setNotice('설정은 다음 단계에서 제공됩니다')
 
   const startDollMaker = async () => {
     setIsCheckingLimit(true)
@@ -144,15 +148,16 @@ function App() {
     )
   }
 
+  if (screen === 'settings') {
+    return <SettingsScreen onHome={() => setScreen('home')} />
+  }
+
   return (
     <>
       <div className="page-shell" ref={pageRef}>
         <header className="topbar">
-          <a className="brand-mark" href="#main-content" aria-label="속풀이 인형방 홈">
-            <span aria-hidden="true">실</span>
-          </a>
           <nav className="utility-nav" aria-label="도움말 메뉴">
-            <button type="button" className="text-button" onClick={showSettingsNotice}>
+            <button type="button" className="text-button" onClick={() => setScreen('settings')}>
               <span aria-hidden="true" className="button-symbol">⚙</span>
               설정
             </button>
@@ -170,7 +175,6 @@ function App() {
 
         <main className="hero" id="main-content">
           <section className="hero-copy" aria-labelledby="page-title">
-            <p className="eyebrow">마음이 복잡한 날, 조용히 들르는 곳</p>
             <h1 id="page-title">속풀이<br />인형방</h1>
             <p className="subtitle">내 브라우저 안의 비밀 인형방</p>
             <p className="intro">누구에게도 보이지 않게,<br />작은 인형에게 마음을 잠시 맡겨보세요.</p>
@@ -185,11 +189,9 @@ function App() {
                 alt="얼굴이 비어 있는 크림색 원피스를 입은 헝겊인형"
               />
             </figure>
-            <p className="doll-caption">당신만의 인형을 기다리고 있어요</p>
           </section>
 
           <section className="actions" aria-label="시작 메뉴">
-            <p className="action-kicker"><span aria-hidden="true">✦</span> 오늘의 속마음은 안전해요</p>
             <button type="button" className="primary-action" disabled={isCheckingLimit} onClick={() => void startDollMaker()}>
               <span className="action-icon" aria-hidden="true">＋</span>
               <span>{isCheckingLimit ? '보관함 확인 중…' : '새 인형 만들기'}<small>마음을 담을 인형 만들기</small></span>

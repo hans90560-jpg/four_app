@@ -19,7 +19,7 @@ export type DollInteractionState = {
   pins: Pin[]
   selectedCurse: CurseId | null
   talismanStatus: 'attached' | null
-  charredUntil: null
+  charredUntil: string | null
 }
 
 export type DollRecord = {
@@ -125,14 +125,16 @@ function emptyInteractionState(): DollInteractionState {
 }
 
 function normalizeRecord(record: DollRecord): DollRecord {
-  const interactionState = record.interactionState
+  const interactionState = record.interactionState as Partial<DollInteractionState> | undefined
   return {
     ...record,
     interactionState: {
       pins: Array.isArray(interactionState?.pins) ? interactionState.pins : [],
       selectedCurse: interactionState?.selectedCurse ?? null,
       talismanStatus: interactionState?.talismanStatus ?? null,
-      charredUntil: interactionState?.charredUntil ?? null,
+      charredUntil: typeof interactionState?.charredUntil === 'string'
+        ? interactionState.charredUntil
+        : null,
     },
   }
 }

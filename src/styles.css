@@ -1401,7 +1401,7 @@ footer p { margin: 0; }
 }
 
 .talisman-layer.is-burning .talisman-paper {
-  animation: talisman-burn-away 2.3s linear both;
+  animation: talisman-burn-away var(--talisman-burn-duration) linear both;
 }
 
 .talisman-layer.is-burning::after {
@@ -1412,7 +1412,7 @@ footer p { margin: 0; }
   clip-path: polygon(2% 0, 98% 0, 100% 3%, 100% 97%, 98% 100%, 2% 100%, 0 97%, 0 3%);
   background: linear-gradient(to top, rgba(79,39,19,.86) 0 18%, rgba(191,72,25,.72) 20%, rgba(255,158,47,.82) 22%, transparent 25%);
   pointer-events: none;
-  animation: talisman-scorch-rise 2.3s linear both;
+  animation: talisman-scorch-rise var(--talisman-burn-duration) linear both;
 }
 
 .talisman-paper {
@@ -1842,9 +1842,9 @@ footer p { margin: 0; }
   transform: scale(1.5);
   transform-origin: center;
   filter: brightness(1.12) contrast(1.08);
-  animation: curse-effect-maximum-life 2.3s ease-out both;
+  animation: curse-effect-maximum-life var(--talisman-maximum-effect-duration) ease-out both;
 }
-.curse-effect.is-maximum .curse-effect-image { animation-duration: 2.3s; }
+.curse-effect.is-maximum .curse-effect-image { animation-duration: var(--talisman-effect-reveal-duration); }
 .curse-effect-image {
   display: block;
   width: 100%;
@@ -1861,7 +1861,7 @@ footer p { margin: 0; }
   inset: -8% -12% -5%;
   overflow: visible;
   pointer-events: none;
-  animation: burn-effect-lifetime 2.3s linear both;
+  animation: burn-effect-lifetime var(--talisman-burn-duration) linear both;
 }
 .talisman-burn-effect img {
   position: absolute;
@@ -1881,7 +1881,7 @@ footer p { margin: 0; }
   bottom: -2%;
   width: 108%;
   height: 104%;
-  animation: talisman-flame-back 2.3s ease-in-out both;
+  animation: talisman-flame-back var(--talisman-burn-duration) ease-in-out both;
 }
 .talisman-flame-layer.is-front {
   z-index: 2;
@@ -1890,7 +1890,7 @@ footer p { margin: 0; }
   width: 102%;
   height: 100%;
   opacity: .78;
-  animation: talisman-flame-front 2.3s ease-in-out both;
+  animation: talisman-flame-front var(--talisman-burn-duration) ease-in-out both;
 }
 .talisman-ash-layer {
   z-index: 3;
@@ -1898,7 +1898,7 @@ footer p { margin: 0; }
   bottom: -4%;
   width: 112%;
   height: 108%;
-  animation: talisman-ash-rise 2.3s ease-out both;
+  animation: talisman-ash-rise var(--talisman-burn-duration) ease-out both;
 }
 
 .room-burn-chant {
@@ -1917,7 +1917,7 @@ footer p { margin: 0; }
   text-wrap: balance;
   text-shadow: 0 1px 0 #fff2ce, 1px 0 0 rgba(255,242,206,.78), -1px 0 0 rgba(255,242,206,.56);
   pointer-events: none;
-  animation: room-burn-chant-life 2.3s linear both;
+  animation: room-burn-chant-life var(--talisman-maximum-effect-duration) linear both;
 }
 
 .spell-backdrop {
@@ -2023,6 +2023,7 @@ footer p { margin: 0; }
 @keyframes talisman-panel-rise { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes curse-effect-fade { 0% { opacity: 0; } 18%, 72% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes curse-effect-maximum-life { 0% { opacity: 0; } 12%, 84% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes curse-effect-maximum-reduced-life { 0% { opacity: 0; } 4.5%, 95.5% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes mansabultong-tighten { 0% { opacity: 0; transform: scale(.86); } 25% { opacity: 1; } 58% { transform: scale(1.045); } 78%, 100% { opacity: 1; transform: scale(1); } }
 @keyframes mangsinsari-pop { 0% { opacity: 0; transform: scale(.7); } 38% { opacity: 1; transform: scale(1.08); } 58%, 100% { opacity: 1; transform: scale(1); } }
 @keyframes agungangrim-drop { 0% { opacity: 0; transform: translateY(-14%); filter: brightness(.9); } 33% { opacity: 1; transform: translateY(0); filter: brightness(1); } 48% { filter: brightness(1.65) drop-shadow(0 0 8px rgba(255,211,70,.8)); } 58%, 100% { opacity: 1; transform: translateY(0); filter: brightness(1); } }
@@ -2232,14 +2233,14 @@ footer p { margin: 0; }
   .pin-sparkle { animation-duration: 120ms; }
   .talisman-panel { animation: curse-effect-fade 120ms ease-out both; }
   .curse-effect { animation: curse-effect-fade 260ms linear both; }
-  .curse-effect.is-maximum { animation: curse-effect-maximum-life 2.3s linear both; }
+  .curse-effect.is-maximum { animation: curse-effect-maximum-reduced-life var(--talisman-maximum-effect-duration) linear both; }
   .curse-effect-image { animation: none !important; transform: none !important; filter: none !important; }
   .talisman-layer.is-casting .talisman-paper { box-shadow: 0 0 5px rgba(166,43,35,.35); }
-  .talisman-layer.is-burning .talisman-paper { animation: talisman-burn-reduced 2.3s linear both; }
+  .talisman-layer.is-burning .talisman-paper { animation: talisman-burn-reduced var(--talisman-burn-duration) linear both; }
   .talisman-layer.is-burning::after { display: none; }
-  .talisman-burn-effect img { animation: burn-layer-reduced 2.3s linear both !important; transform: none !important; }
-  .talisman-burn-effect { animation-duration: 2.3s; }
-  .room-burn-chant { animation: room-burn-chant-life 2.3s linear both; }
+  .talisman-burn-effect img { animation: burn-layer-reduced var(--talisman-burn-duration) linear both !important; transform: none !important; }
+  .talisman-burn-effect { animation-duration: var(--talisman-burn-duration); }
+  .room-burn-chant { animation: curse-effect-maximum-reduced-life var(--talisman-maximum-effect-duration) linear both; }
   .shake-cry { animation: curse-effect-fade 360ms linear both; }
   .spell-backdrop,
   .spell-chant span { transition: none; }

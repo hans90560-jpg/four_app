@@ -30,6 +30,9 @@ import {
   AttachedTalismanPanel,
   SpellPanel,
   TALISMAN_BURN_DURATION_MS,
+  TALISMAN_EFFECT_OVERLAP_MS,
+  TALISMAN_EFFECT_START_MS,
+  TALISMAN_MAXIMUM_EFFECT_DURATION_MS,
   TalismanBurnDialog,
   TalismanBurnEffect,
 } from './CurseActions'
@@ -53,6 +56,12 @@ const ROOM_COMPOSITE_STYLE = {
   '--talisman-left': '28.5%',
   '--talisman-top': '12%',
   '--talisman-width': '43%',
+} as CSSProperties
+
+const TALISMAN_TIMING_STYLE = {
+  '--talisman-burn-duration': `${TALISMAN_BURN_DURATION_MS}ms`,
+  '--talisman-effect-reveal-duration': `${TALISMAN_EFFECT_OVERLAP_MS}ms`,
+  '--talisman-maximum-effect-duration': `${TALISMAN_MAXIMUM_EFFECT_DURATION_MS}ms`,
 } as CSSProperties
 
 type ActiveTool = 'needle' | 'shake' | 'talisman' | null
@@ -167,11 +176,13 @@ export default function CurseRoom({
   const sparkleTimerRef = useRef<number | null>(null)
   const motionTimerRef = useRef<number | null>(null)
   const effectTimerRef = useRef<number | null>(null)
+  const burnEffectRevealTimerRef = useRef<number | null>(null)
   const burnTimerRef = useRef<number | null>(null)
   const dollBurnTimerRef = useRef<number | null>(null)
   const charredTimerRef = useRef<number | null>(null)
   const charredUntilRef = useRef<string | null>(null)
   const burnSaveRef = useRef(false)
+  const burnSequenceRef = useRef(false)
   const dollBurnSaveRef = useRef(false)
   const purifySaveRef = useRef(false)
   const talismanSaveRef = useRef(false)
@@ -298,11 +309,13 @@ export default function CurseRoom({
       if (sparkleTimerRef.current !== null) window.clearTimeout(sparkleTimerRef.current)
       if (motionTimerRef.current !== null) window.clearTimeout(motionTimerRef.current)
       if (effectTimerRef.current !== null) window.clearTimeout(effectTimerRef.current)
+      if (burnEffectRevealTimerRef.current !== null) window.clearTimeout(burnEffectRevealTimerRef.current)
       if (burnTimerRef.current !== null) window.clearTimeout(burnTimerRef.current)
       if (dollBurnTimerRef.current !== null) window.clearTimeout(dollBurnTimerRef.current)
       clearCharredTimer()
       shakeCryTimersRef.current.forEach((timer) => window.clearTimeout(timer))
       shakeCryTimersRef.current.clear()
+      burnSequenceRef.current = false
     }
   }, [clearCharredTimer, clearExpiredCharred, dollId, scheduleCharredExpiry])
 
@@ -591,12 +604,14 @@ export default function CurseRoom({
     setEffectCurseId(curseId)
     setEffectIntensity(intensity)
     const duration = intensity === 'maximum'
-      ? TALISMAN_BURN_DURATION_MS
+      ? TALISMAN_MAXIMUM_EFFECT_DURATION_MS
       : intensity === 'enhanced' ? 1600 : 1400
     effectTimerRef.current = window.setTimeout(() => {
+      effectTimerRef.current = null
       if (!mountedRef.current) return
       setEffectCurseId(null)
       setEffectIntensity('normal')
+      if (intensity === 'maximum') setBurnChant('')
     }, duration)
   }, [])
 
@@ -611,13 +626,10 @@ export default function CurseRoom({
       window.clearTimeout(burnTimerRef.current)
       burnTimerRef.current = null
     }
-    if (effectTimerRef.current !== null) {
-      window.clearTimeout(effectTimerRef.current)
-      effectTimerRef.current = null
+    if (burnEffectRevealTimerRef.current !== null) {
+      window.clearTimeout(burnEffectRevealTimerRef.current)
+      burnEffectRevealTimerRef.current = null
     }
-      setBurnChant('')
-      setEffectCurseId(null)
-      setEffectIntensity('normal')
       setIsTalismanBurning(false)
       setSaveStatus('saving')
       try {
@@ -643,23 +655,41 @@ export default function CurseRoom({
         setNotice('부적 상태를 저장하지 못했어요. 다시 시도해 주세요.')
       } finally {
         burnSaveRef.current = false
+        burnSequenceRef.current = false
       }
   }, [dollId])
 
   const startTalismanBurn = () => {
-    if (!attachedCurseId || isTalismanBurning || burnSaveRef.current) return
+    if (!attachedCurseId || isTalismanBurning || burnSaveRef.current || burnSequenceRef.current) return
     const curse = getCurseById(attachedCurseId)
     const curseName = curse?.name ?? '현재 저주'
+    burnSequenceRef.current = true
     burnSaveRef.current = false
+    if (effectTimerRef.current !== null) {
+      window.clearTimeout(effectTimerRef.current)
+      effectTimerRef.current = null
+    }
+    if (burnEffectRevealTimerRef.current !== null) {
+      window.clearTimeout(burnEffectRevealTimerRef.current)
+    }
+    if (burnTimerRef.current !== null) window.clearTimeout(burnTimerRef.current)
     setIsSpellPanelOpen(false)
     setIsAttachedPanelOpen(false)
     setIsCasting(false)
     setIsTalismanBurning(true)
-    setBurnChant(curse?.chant ?? '')
-    setNotice(`${curseName}의 기운이 최고조로 치솟습니다.`)
-    showCurseEffect(attachedCurseId, 'maximum')
+    setBurnChant('')
+    setEffectCurseId(null)
+    setEffectIntensity('normal')
+    setNotice(`${curseName} 부적이 화면 속에서 타오릅니다.`)
 
-    if (burnTimerRef.current !== null) window.clearTimeout(burnTimerRef.current)
+    burnEffectRevealTimerRef.current = window.setTimeout(() => {
+      burnEffectRevealTimerRef.current = null
+      if (!mountedRef.current || !burnSequenceRef.current) return
+      setBurnChant(curse?.chant ?? '')
+      setNotice(`${curseName}의 기운이 최고조로 치솟습니다.`)
+      showCurseEffect(attachedCurseId, 'maximum')
+    }, TALISMAN_EFFECT_START_MS)
+
     burnTimerRef.current = window.setTimeout(() => void finishTalismanBurn(), TALISMAN_BURN_DURATION_MS)
   }
 
@@ -1062,7 +1092,11 @@ export default function CurseRoom({
         </header>
 
         <main className="curse-room-main" id="main-content">
-        <section className="curse-room-stage" aria-label={`${doll.name} 인형 상호작용 영역`}>
+        <section
+          className="curse-room-stage"
+          aria-label={`${doll.name} 인형 상호작용 영역`}
+          style={TALISMAN_TIMING_STYLE}
+        >
           <div className="room-paper-halo" aria-hidden="true" />
           <div
             className={`doll-burn-motion-wrapper${isDollBurning ? ' is-burning' : ''}`}

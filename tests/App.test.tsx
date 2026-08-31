@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App'
 import SettingsScreen from '../src/SettingsScreen'
 import appStyles from '../src/styles.css?raw'
+import {
+  TALISMAN_BURN_DURATION_MS,
+  TALISMAN_EFFECT_OVERLAP_MS,
+  TALISMAN_EFFECT_START_MS,
+} from '../src/CurseActions'
 import { CURSES, type CurseCategory } from '../src/curses'
 import {
   DOLL_LIMIT_MESSAGE,
@@ -1585,12 +1590,13 @@ describe('통합 주문과 부적 태우기', () => {
     expect((await getDoll(created.id))?.interactionState.selectedCurse).toBe('mansabultong')
   })
 
-  it('주문 완료 직후 연소와 maximum 효과를 시작하고 완료 전까지 유지한다', async () => {
+  it('불꽃 후반부에 maximum 효과와 주문을 표시하고 불꽃 종료 후 같은 효과를 유지한다', async () => {
     const { user } = await openCurseRoomFromArchive('절정')
     await attachTalisman(user)
     const frames = mockAnimationFrames()
     const panel = await openBurnSpell(user)
     const holdButton = within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' })
+    vi.useFakeTimers()
 
     fireEvent.pointerDown(holdButton, { pointerId: 1 })
     fireEvent.pointerDown(holdButton, { pointerId: 1 })
@@ -1598,7 +1604,7 @@ describe('통합 주문과 부적 태우기', () => {
     act(() => frames.runAt(1500))
 
     expect(screen.queryByRole('dialog', { name: '만사불통 주문 외우기' })).not.toBeInTheDocument()
-    const burnEffect = await screen.findByTestId('talisman-burn-effect')
+    const burnEffect = screen.getByTestId('talisman-burn-effect')
     const burnImages = Array.from(burnEffect.querySelectorAll('img'))
     expect(burnImages).toHaveLength(3)
     expect(burnImages[0]).toHaveAttribute('src', expect.stringContaining('/assets/effects/talisman-flame-v1.png'))
@@ -1606,6 +1612,15 @@ describe('통합 주문과 부적 태우기', () => {
     expect(burnImages[2]).toHaveAttribute('src', expect.stringContaining('/assets/effects/talisman-ash-v1.png'))
     burnImages.forEach((image) => expect(image).toHaveAttribute('alt', ''))
     expect(burnEffect.querySelector('i')).toBeNull()
+    expect(screen.queryByTestId('curse-effect-mansabultong')).not.toBeInTheDocument()
+    expect(screen.queryByText('실실 꼬여 길길 막혀, 만사불통 얍!')).not.toBeInTheDocument()
+    expect(screen.getByText('만사불통 부적이 화면 속에서 타오릅니다.')).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(TALISMAN_EFFECT_START_MS - 1))
+    expect(screen.queryByTestId('curse-effect-mansabultong')).not.toBeInTheDocument()
+    expect(screen.queryByText('실실 꼬여 길길 막혀, 만사불통 얍!')).not.toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(1))
     const maximumEffect = screen.getByTestId('curse-effect-mansabultong')
     expect(maximumEffect).toHaveClass('is-maximum')
     expect(maximumEffect).toHaveAttribute('data-effect-intensity', 'maximum')
@@ -1616,7 +1631,19 @@ describe('통합 주문과 부적 태우기', () => {
     expect(screen.getByText('만사불통의 기운이 최고조로 치솟습니다.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '정화하기' })).toBeDisabled()
     expect(screen.queryByTestId('chant-burst')).not.toBeInTheDocument()
-    expect(maximumEffect).toBeInTheDocument()
+    expect(TALISMAN_EFFECT_START_MS).toBe(TALISMAN_BURN_DURATION_MS - TALISMAN_EFFECT_OVERLAP_MS)
+
+    act(() => {
+      vi.advanceTimersByTime(TALISMAN_EFFECT_OVERLAP_MS - 1)
+    })
+    expect(screen.getByTestId('talisman-burn-effect')).toBeInTheDocument()
+    vi.useRealTimers()
+    await finishTalismanBurnAnimation()
+
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
+    expect(screen.getByTestId('curse-effect-mansabultong')).toBe(maximumEffect)
+    expect(screen.getByText('실실 꼬여 길길 막혀, 만사불통 얍!')).toBe(roomChant)
+    expect(await screen.findByText('부적은 재가 되고 저주는 화면 속에서 끝났습니다.')).toBeInTheDocument()
   })
 
   it('키보드 Space로 주문을 완료한 뒤 부적 상태만 초기화하고 바늘을 유지한다', async () => {
@@ -1632,7 +1659,7 @@ describe('통합 주문과 부적 태우기', () => {
     act(() => frames.runAt(1500))
     fireEvent.keyUp(holdButton, { key: ' ' })
     expect(await screen.findByTestId('talisman-burn-effect')).toBeInTheDocument()
-    expect(screen.getByText('실실 꼬여 길길 막혀, 만사불통 얍!')).toHaveClass('room-burn-chant')
+    expect(screen.queryByText('실실 꼬여 길길 막혀, 만사불통 얍!')).not.toBeInTheDocument()
     await finishTalismanBurnAnimation()
 
     expect(await screen.findByText('부적은 재가 되고 저주는 화면 속에서 끝났습니다.')).toBeInTheDocument()
@@ -1722,10 +1749,14 @@ describe('통합 주문과 부적 태우기', () => {
     await attachTalisman(user)
     const frames = mockAnimationFrames()
     const panel = await openBurnSpell(user)
+    vi.useFakeTimers()
     fireEvent.pointerDown(within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' }), { pointerId: 1 })
     act(() => frames.runAt(1500))
-    await screen.findByTestId('talisman-burn-effect')
+    expect(screen.getByTestId('talisman-burn-effect')).toBeInTheDocument()
+    expect(screen.queryByTestId('curse-effect-mansabultong')).not.toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(TALISMAN_EFFECT_START_MS))
     expect(screen.getByTestId('curse-effect-mansabultong')).toHaveAttribute('data-effect-intensity', 'maximum')
+    vi.useRealTimers()
     await finishTalismanBurnAnimation()
     await waitFor(async () => expect((await getDoll(created.id))?.interactionState.selectedCurse).toBeNull())
   })

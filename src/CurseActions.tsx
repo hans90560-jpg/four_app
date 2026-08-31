@@ -14,6 +14,9 @@ import { TalismanPaper } from './Talisman'
 
 export const CHANT_DURATION_MS = 1500
 export const TALISMAN_BURN_DURATION_MS = 2300
+export const TALISMAN_EFFECT_OVERLAP_MS = 500
+export const TALISMAN_EFFECT_START_MS = TALISMAN_BURN_DURATION_MS - TALISMAN_EFFECT_OVERLAP_MS
+export const TALISMAN_MAXIMUM_EFFECT_DURATION_MS = 2300
 
 export function AttachedTalismanPanel({
   dialogRef,

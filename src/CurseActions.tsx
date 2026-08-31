@@ -7,10 +7,12 @@ import {
   type PointerEvent,
   type RefObject,
 } from 'react'
+import talismanAshImage from '../assets/effects/talisman-ash-v1.png'
+import talismanFlameImage from '../assets/effects/talisman-flame-v1.png'
 import { getCurseById, type CurseId } from './curses'
 import { TalismanPaper } from './Talisman'
 
-export const CHANT_DURATION_MS = 2500
+export const CHANT_DURATION_MS = 1500
 export const TALISMAN_BURN_DURATION_MS = 2300
 
 export function AttachedTalismanPanel({
@@ -87,7 +89,7 @@ export function TalismanBurnDialog({
         ref={dialogRef}
       >
         <h2 id="talisman-burn-title">{curse?.name} 부적을 태울까요?</h2>
-        <p id="talisman-burn-description">부적을 태우면 이 저주 효과가 끝나고 부적이 사라집니다.</p>
+        <p id="talisman-burn-description">계속하면 주문 화면이 열립니다. 주문을 끝까지 외운 뒤 부적이 타오르고 저주가 끝납니다.</p>
         <div className="talisman-confirm-actions">
           <button type="button" className="secondary-maker-button" disabled={busy} onClick={onCancel}>취소</button>
           <button type="button" className="talisman-burn-button" disabled={busy} onClick={onConfirm}>{busy ? '태우는 중…' : '계속하기'}</button>
@@ -112,7 +114,7 @@ export function SpellPanel({
 }) {
   const curse = getCurseById(curseId)
   const [progress, setProgress] = useState(0)
-  const [status, setStatus] = useState('2.5초 동안 길게 눌러 주세요')
+  const [status, setStatus] = useState('1.5초 동안 길게 눌러 주세요')
   const frameRef = useRef<number | null>(null)
   const startedAtRef = useRef(0)
   const castingRef = useRef(false)
@@ -145,7 +147,7 @@ export function SpellPanel({
     sourceRef.current = null
     progressRef.current = 100
     setProgress(100)
-    setStatus('주문이 완성됐어요')
+    setStatus(`${curse?.name ?? '현재 저주'}의 주문이 완성됐습니다.`)
     onCastingChange(false)
     onComplete()
   }
@@ -230,12 +232,8 @@ export function SpellPanel({
         <button type="button" className="talisman-panel-close" aria-label="주문 외우기 닫기" onClick={closeSafely}>×</button>
         <header>
           <p>현재 부적의 주문</p>
-          <h2 id="spell-panel-title">{curse.name}</h2>
-          <p id="spell-panel-description" className="spell-chant">
-            {characters.map((character, index) => (
-              <span key={`${character}-${index}`} className={index < highlightedCount ? 'is-highlighted' : ''}>{character}</span>
-            ))}
-          </p>
+          <h2 id="spell-panel-title">{curse.name} 주문 외우기</h2>
+          <p id="spell-panel-description" className="spell-transition-note">주문을 마치면 부적이 타오릅니다</p>
         </header>
 
         <div
@@ -244,12 +242,18 @@ export function SpellPanel({
           aria-label="주문 시전 진행률"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(progress)}
-          style={{ '--spell-progress': `${progress * 3.6}deg` } as CSSProperties}
+          aria-valuenow={Math.floor(progress)}
+          style={{ '--spell-progress': `${progress}%` } as CSSProperties}
         >
           <TalismanPaper curseId={curseId} preview />
-          <strong>{Math.round(progress)}%</strong>
+          <strong>{Math.floor(progress)}%</strong>
         </div>
+
+        <p className="spell-chant">
+          {characters.map((character, index) => (
+            <span key={`${character}-${index}`} className={index < highlightedCount ? 'is-highlighted' : ''}>{character}</span>
+          ))}
+        </p>
 
         <p className="spell-status" role="status" aria-live="polite">{status}</p>
         <button
@@ -262,8 +266,8 @@ export function SpellPanel({
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
           onContextMenu={(event) => event.preventDefault()}
-        >길게 눌러 주문 시전</button>
-        <button type="button" className="secondary-maker-button spell-cancel-button" onClick={closeSafely}>취소 및 닫기</button>
+        >길게 눌러 주문 외우기</button>
+        <button type="button" className="secondary-maker-button spell-cancel-button" onClick={closeSafely}>취소하고 돌아가기</button>
       </section>
     </div>
   )
@@ -279,16 +283,9 @@ export function TalismanBurnEffect({ onComplete }: { onComplete: () => void }) {
         if (event.currentTarget === event.target) onComplete()
       }}
     >
-      <i className="burn-flame" /><i className="burn-flame" /><i className="burn-flame" />
-      <i className="burn-fragment" /><i className="burn-fragment" /><i className="burn-fragment" />
-    </div>
-  )
-}
-
-export function ChantBurst() {
-  return (
-    <div className="chant-burst" data-testid="chant-burst" aria-hidden="true">
-      <i>✦</i><i>✧</i><i /><i /><i />
+      <img className="talisman-flame-layer is-back" src={talismanFlameImage} alt="" draggable={false} />
+      <img className="talisman-flame-layer is-front" src={talismanFlameImage} alt="" draggable={false} />
+      <img className="talisman-ash-layer" src={talismanAshImage} alt="" draggable={false} />
     </div>
   )
 }

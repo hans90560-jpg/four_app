@@ -12,7 +12,12 @@ export function TalismanPaper({ curseId, preview = false }: { curseId: CurseId; 
   if (!curse) return null
 
   return (
-    <div className={`talisman-paper${preview ? ' is-preview' : ''}`} role="img" aria-label={`${curse.name} 부적`}>
+    <div
+      className={`talisman-paper${preview ? ' is-preview' : ''}`}
+      role="img"
+      aria-label={`${curse.name} 부적`}
+      data-aspect-ratio="1:1.8"
+    >
       <span className="talisman-frame" aria-hidden="true" />
       <span className="talisman-ornament is-top" aria-hidden="true">
         {Array.from({ length: 9 }, (_, index) => <i key={index} />)}
@@ -29,11 +34,20 @@ export function TalismanPaper({ curseId, preview = false }: { curseId: CurseId; 
   )
 }
 
-export function CurseEffect({ curseId, enhanced = false }: { curseId: CurseId; enhanced?: boolean }) {
+export type CurseEffectIntensity = 'normal' | 'enhanced' | 'maximum'
+
+export function CurseEffect({
+  curseId,
+  intensity = 'normal',
+}: {
+  curseId: CurseId
+  intensity?: CurseEffectIntensity
+}) {
   const imageSource = CURSE_EFFECT_IMAGES[curseId]
   const commonProps = {
-    className: `curse-effect effect-${curseId}${enhanced ? ' is-enhanced' : ''}`,
+    className: `curse-effect effect-${curseId} is-${intensity}`,
     'data-testid': `curse-effect-${curseId}`,
+    'data-effect-intensity': intensity,
     'aria-hidden': true,
   } as const
   const imageProps = {

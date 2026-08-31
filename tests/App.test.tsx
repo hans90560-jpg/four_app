@@ -91,6 +91,15 @@ async function attachTalisman(
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '부적 선택' })).not.toBeInTheDocument())
 }
 
+async function openBurnSpell(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: '부적' }))
+  const infoPanel = await screen.findByRole('dialog', { name: '만사불통' })
+  await user.click(within(infoPanel).getByRole('button', { name: '부적 태우기' }))
+  const confirmation = screen.getByRole('dialog', { name: '만사불통 부적을 태울까요?' })
+  await user.click(within(confirmation).getByRole('button', { name: '계속하기' }))
+  return screen.findByRole('dialog', { name: '만사불통 주문 외우기' })
+}
+
 function mockAnimationFrames() {
   const callbacks: FrameRequestCallback[] = []
   const request = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
@@ -640,7 +649,9 @@ describe('저주방', () => {
 
     expect(screen.getByRole('img', { name: '보관 여성형 헝겊인형' }))
       .toHaveAttribute('src', expect.stringContaining('doll-female-base-v1.png'))
-    expect(document.querySelector('.room-face-image')).toHaveAttribute('src', expect.stringContaining('blob:'))
+    await waitFor(() => {
+      expect(document.querySelector('.room-face-image')).toHaveAttribute('src', expect.stringContaining('blob:'))
+    })
     expect(screen.getByLabelText('대상 이름 보관').querySelectorAll('span')).toHaveLength(2)
 
     await user.click(screen.getByRole('button', { name: '← 나가기' }))
@@ -738,9 +749,47 @@ describe('저주방', () => {
     fireEvent(dollArea, pointerDown)
     fireEvent(dollArea, pointerMove)
     expect(screen.getByTestId('room-doll-transform').getAttribute('style')).toContain('rotate(12deg)')
+    const cry = screen.getByTestId('shake-cry')
+    expect(cry).toHaveTextContent('악!')
+    expect(cry).toHaveClass('is-right')
+    expect(cry).toHaveAttribute('aria-hidden', 'true')
     fireEvent(dollArea, pointerUp)
     expect(screen.getByTestId('room-doll-transform')).toHaveStyle({ transform: 'translateX(0px) rotate(0deg)' })
     expect(screen.getByTestId('room-doll-transform')).toHaveClass('is-returning')
+    expect(screen.queryByTestId('shake-cry')).not.toBeInTheDocument()
+  })
+
+  it('흔드는 방향이 바뀔 때만 제한적으로 새 악! 글씨를 표시한다', async () => {
+    const { user } = await openCurseRoomFromArchive('반전')
+    await user.click(screen.getByRole('button', { name: '흔들기' }))
+    const dollArea = mockDollBounds()
+    const dispatchPointer = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX })
+      Object.defineProperty(event, 'pointerId', { value: 7 })
+      fireEvent(dollArea, event)
+    }
+
+    dispatchPointer('pointerdown', 100)
+    dispatchPointer('pointermove', 140)
+    expect(screen.getAllByTestId('shake-cry')).toHaveLength(1)
+
+    dispatchPointer('pointermove', 145)
+    dispatchPointer('pointermove', 148)
+    expect(screen.getAllByTestId('shake-cry')).toHaveLength(1)
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    })
+    dispatchPointer('pointermove', 110)
+    const cries = screen.getAllByTestId('shake-cry')
+    expect(cries).toHaveLength(2)
+    expect(cries[0]).toHaveClass('is-right')
+    expect(cries[1]).toHaveClass('is-left')
+    expect(cries.every((element) => element.getAttribute('aria-hidden') === 'true')).toBe(true)
+    expect(document.querySelector('audio')).not.toBeInTheDocument()
+
+    dispatchPointer('pointerup', 110)
+    expect(screen.queryByTestId('shake-cry')).not.toBeInTheDocument()
   })
 
   it('비활성 도구는 다음 단계 안내를 표시한다', async () => {
@@ -786,6 +835,7 @@ describe('부적 선택과 부착', () => {
     const { user, created } = await openCurseRoomFromArchive('부착')
     const panel = await selectTalisman(user, '만사불통')
     const preview = within(panel).getByRole('img', { name: '만사불통 부적' })
+    expect(preview).toHaveAttribute('data-aspect-ratio', '1:1.8')
     expect(preview.querySelectorAll('.talisman-writing > span')).toHaveLength(4)
     expect(preview.querySelector('.talisman-frame')).toBeInTheDocument()
     expect(preview.querySelectorAll('.talisman-ornament i')).toHaveLength(18)
@@ -794,6 +844,7 @@ describe('부적 선택과 부착', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '부적 선택' })).not.toBeInTheDocument())
 
     const attached = screen.getByRole('img', { name: '만사불통 부적' })
+    expect(attached).toHaveAttribute('data-aspect-ratio', '1:1.8')
     expect(attached.querySelectorAll('.talisman-writing > span')).toHaveLength(4)
     await waitFor(async () => {
       const stored = await getDoll(created.id)
@@ -822,7 +873,7 @@ describe('부적 선택과 부착', () => {
     expect((await getDoll(created.id))?.interactionState.selectedCurse).toBe('mansabultong')
 
     await user.click(within(panel).getByRole('button', { name: '취소' }))
-    expect(screen.getByRole('img', { name: '만사불통 부적' })).toBeInTheDocument()
+    expect(document.querySelector('.talisman-layer .talisman-paper')).toHaveAttribute('aria-label', '만사불통 부적')
   })
 
   it('교체를 확인하면 새 부적을 저장하면서 기존 바늘 상태를 보존한다', async () => {
@@ -940,99 +991,68 @@ describe('부적 선택과 부착', () => {
   })
 })
 
-describe('주문 외우기와 부적 태우기', () => {
-  it('부적이 없으면 주문을 비활성화하고 먼저 부적을 붙이라는 안내를 표시한다', async () => {
+describe('통합 주문과 부적 태우기', () => {
+  it('도구 모음에서 독립 주문 버튼과 부적 없는 주문 진입 경로를 제거한다', async () => {
     await openCurseRoomFromArchive('준비')
+    const toolbar = screen.getByRole('toolbar', { name: '저주방 도구' })
 
-    expect(screen.getByRole('button', { name: '주문 외우기' })).toBeDisabled()
-    expect(screen.getByText('먼저 부적을 붙여 주세요')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '부적 태우기' })).not.toBeInTheDocument()
+    expect(within(toolbar).getAllByRole('button')).toHaveLength(5)
+    expect(within(toolbar).queryByRole('button', { name: '주문 외우기' })).not.toBeInTheDocument()
+    expect(screen.queryByText('먼저 부적을 붙여 주세요')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: /주문 외우기/ })).not.toBeInTheDocument()
   })
 
-  it('부적이 있으면 현재 저주의 주문 문구와 접근 가능한 진행 게이지를 표시한다', async () => {
+  it('부적 태우기 확인 후 동일 비율 부적과 주문 문구가 있는 주문 화면을 연다', async () => {
     const { user } = await openCurseRoomFromArchive('주문')
     await attachTalisman(user)
-    const spellButton = screen.getByRole('button', { name: '주문 외우기' })
-    expect(spellButton).toBeEnabled()
+    const panel = await openBurnSpell(user)
 
-    await user.click(spellButton)
-    const panel = await screen.findByRole('dialog', { name: '만사불통' })
+    expect(within(panel).getByText('주문을 마치면 부적이 타오릅니다')).toBeInTheDocument()
     expect(within(panel).getByText((_, element) => element?.classList.contains('spell-chant') === true))
       .toHaveTextContent('실실 꼬여 길길 막혀, 만사불통 얍!')
     expect(within(panel).getByRole('progressbar', { name: '주문 시전 진행률' })).toHaveAttribute('aria-valuenow', '0')
-    expect(within(panel).getByRole('button', { name: '길게 눌러 주문 시전' })).toHaveFocus()
+    expect(within(panel).getByRole('img', { name: '만사불통 부적' })).toHaveAttribute('data-aspect-ratio', '1:1.8')
+    const visibleTalismanSurfaces = Array.from(document.querySelectorAll('.talisman-paper'))
+    expect(visibleTalismanSurfaces.length).toBeGreaterThanOrEqual(3)
+    expect(visibleTalismanSurfaces.every((surface) => surface.getAttribute('data-aspect-ratio') === '1:1.8')).toBe(true)
+    expect(within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' })).toHaveFocus()
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
+  })
+
+  it('Escape로 주문을 취소하면 부적과 저주를 유지하고 태우기 버튼으로 포커스를 돌린다', async () => {
+    const { user, created } = await openCurseRoomFromArchive('취소')
+    await attachTalisman(user)
+    await openBurnSpell(user)
 
     await user.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog', { name: '만사불통' })).not.toBeInTheDocument()
-    expect(spellButton).toHaveFocus()
+
+    expect(screen.queryByRole('dialog', { name: '만사불통 주문 외우기' })).not.toBeInTheDocument()
+    const burnButton = screen.getByRole('button', { name: '부적 태우기' })
+    await waitFor(() => expect(burnButton).toHaveFocus())
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
+    expect((await getDoll(created.id))?.interactionState.selectedCurse).toBe('mansabultong')
+    expect((await getDoll(created.id))?.interactionState.talismanStatus).toBe('attached')
   })
 
-  it('2.5초 전에 포인터를 떼면 주문을 취소하고 효과를 실행하지 않는다', async () => {
-    const { user } = await openCurseRoomFromArchive('취소')
+  it('1.5초 전에 놓거나 취소하면 진행을 초기화하고 연소하지 않는다', async () => {
+    const { user } = await openCurseRoomFromArchive('중단')
     await attachTalisman(user)
     const frames = mockAnimationFrames()
-    await user.click(screen.getByRole('button', { name: '주문 외우기' }))
-    const panel = screen.getByRole('dialog', { name: '만사불통' })
-    const holdButton = within(panel).getByRole('button', { name: '길게 눌러 주문 시전' })
+    const panel = await openBurnSpell(user)
+    const holdButton = within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' })
 
     fireEvent.pointerDown(holdButton, { pointerId: 1 })
-    act(() => frames.runAt(1200))
-    expect(within(panel).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '48')
+    act(() => frames.runAt(1499))
+    expect(within(panel).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '99')
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
     fireEvent.pointerUp(holdButton, { pointerId: 1 })
-
     expect(within(panel).getByText('주문이 취소됐어요')).toBeInTheDocument()
     expect(within(panel).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
-    expect(screen.queryByTestId('chant-burst')).not.toBeInTheDocument()
-  })
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
 
-  it('포인터로 2.5초 유지하면 강화 효과를 한 번 실행하고 부적을 유지하며 중복 시작을 막는다', async () => {
-    const { user } = await openCurseRoomFromArchive('완료')
-    await attachTalisman(user)
-    const frames = mockAnimationFrames()
-    await user.click(screen.getByRole('button', { name: '주문 외우기' }))
-    const panel = screen.getByRole('dialog', { name: '만사불통' })
-    const holdButton = within(panel).getByRole('button', { name: '길게 눌러 주문 시전' })
-
-    fireEvent.pointerDown(holdButton, { pointerId: 1 })
-    fireEvent.pointerDown(holdButton, { pointerId: 1 })
-    expect(frames.request).toHaveBeenCalledTimes(1)
-    act(() => frames.runAt(2600))
-    fireEvent.pointerUp(holdButton, { pointerId: 1 })
-
-    expect(within(panel).getByText('주문이 완성됐어요')).toBeInTheDocument()
-    expect(screen.getByTestId('curse-effect-mansabultong')).toHaveClass('is-enhanced')
-    expect(screen.getByTestId('chant-burst')).toBeInTheDocument()
-    expect(screen.getAllByRole('img', { name: '만사불통 부적' }).length).toBeGreaterThan(0)
-  })
-
-  it('키보드 Space를 2.5초 유지해 주문을 완성할 수 있다', async () => {
-    const { user } = await openCurseRoomFromArchive('키보드')
-    await attachTalisman(user)
-    const frames = mockAnimationFrames()
-    await user.click(screen.getByRole('button', { name: '주문 외우기' }))
-    const panel = screen.getByRole('dialog', { name: '만사불통' })
-    const holdButton = within(panel).getByRole('button', { name: '길게 눌러 주문 시전' })
-
-    fireEvent.keyDown(holdButton, { key: ' ' })
-    act(() => frames.runAt(2600))
-    fireEvent.keyUp(holdButton, { key: ' ' })
-
-    expect(within(panel).getByText('주문이 완성됐어요')).toBeInTheDocument()
-    expect(screen.getByTestId('curse-effect-mansabultong')).toHaveClass('is-enhanced')
-  })
-
-  it('주문 패널을 닫으면 진행 중인 animation frame을 정리한다', async () => {
-    const { user } = await openCurseRoomFromArchive('정리')
-    await attachTalisman(user)
-    const frames = mockAnimationFrames()
-    await user.click(screen.getByRole('button', { name: '주문 외우기' }))
-    const panel = screen.getByRole('dialog', { name: '만사불통' })
-    fireEvent.pointerDown(within(panel).getByRole('button', { name: '길게 눌러 주문 시전' }), { pointerId: 1 })
-
-    await user.click(within(panel).getByRole('button', { name: '취소 및 닫기' }))
-
+    await user.click(within(panel).getByRole('button', { name: '취소하고 돌아가기' }))
     expect(frames.cancel).toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: '만사불통' })).not.toBeInTheDocument()
+    expect(document.querySelector('.talisman-layer .talisman-paper')).toHaveAttribute('aria-label', '만사불통 부적')
   })
 
   it('현재 부적 정보에서 태우기 확인을 취소하면 저장 상태를 유지한다', async () => {
@@ -1050,30 +1070,65 @@ describe('주문 외우기와 부적 태우기', () => {
     expect((await getDoll(created.id))?.interactionState.selectedCurse).toBe('mansabultong')
   })
 
-  it('부적 태우기 완료 시 부적 상태만 초기화하고 바늘과 저주방을 유지한다', async () => {
+  it('주문 완료 직후 연소와 maximum 효과를 시작하고 완료 전까지 유지한다', async () => {
+    const { user } = await openCurseRoomFromArchive('절정')
+    await attachTalisman(user)
+    const frames = mockAnimationFrames()
+    const panel = await openBurnSpell(user)
+    const holdButton = within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' })
+
+    fireEvent.pointerDown(holdButton, { pointerId: 1 })
+    fireEvent.pointerDown(holdButton, { pointerId: 1 })
+    expect(frames.request).toHaveBeenCalledTimes(1)
+    act(() => frames.runAt(1500))
+
+    expect(screen.queryByRole('dialog', { name: '만사불통 주문 외우기' })).not.toBeInTheDocument()
+    const burnEffect = await screen.findByTestId('talisman-burn-effect')
+    const burnImages = Array.from(burnEffect.querySelectorAll('img'))
+    expect(burnImages).toHaveLength(3)
+    expect(burnImages[0]).toHaveAttribute('src', expect.stringContaining('/assets/effects/talisman-flame-v1.png'))
+    expect(burnImages[1]).toHaveAttribute('src', expect.stringContaining('/assets/effects/talisman-flame-v1.png'))
+    expect(burnImages[2]).toHaveAttribute('src', expect.stringContaining('/assets/effects/talisman-ash-v1.png'))
+    burnImages.forEach((image) => expect(image).toHaveAttribute('alt', ''))
+    expect(burnEffect.querySelector('i')).toBeNull()
+    const maximumEffect = screen.getByTestId('curse-effect-mansabultong')
+    expect(maximumEffect).toHaveClass('is-maximum')
+    expect(maximumEffect).toHaveAttribute('data-effect-intensity', 'maximum')
+    const roomChant = screen.getByText('실실 꼬여 길길 막혀, 만사불통 얍!')
+    expect(roomChant).toHaveClass('room-burn-chant')
+    expect(roomChant).toHaveAttribute('role', 'status')
+    expect(roomChant).toHaveAttribute('aria-live', 'polite')
+    expect(screen.getByText('만사불통의 기운이 최고조로 치솟습니다.')).toBeInTheDocument()
+    expect(screen.queryByTestId('chant-burst')).not.toBeInTheDocument()
+    expect(maximumEffect).toBeInTheDocument()
+  })
+
+  it('키보드 Space로 주문을 완료한 뒤 부적 상태만 초기화하고 바늘을 유지한다', async () => {
     const { user, created } = await openCurseRoomFromArchive('태우기')
     await user.click(screen.getByRole('button', { name: '바늘' }))
     fireEvent.click(mockDollBounds(), { clientX: 150, clientY: 247.5 })
     await waitFor(async () => expect((await getDoll(created.id))?.interactionState.pins).toHaveLength(1))
     await attachTalisman(user)
-    await user.click(screen.getByRole('button', { name: '부적' }))
-    await user.click(screen.getByRole('button', { name: '부적 태우기' }))
-    const confirm = screen.getByRole('dialog', { name: '만사불통 부적을 태울까요?' })
-
-    fireEvent.click(within(confirm).getByRole('button', { name: '계속하기' }))
-    expect(screen.getByTestId('talisman-burn-effect')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '부적' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '주문 외우기' })).toBeDisabled()
+    const frames = mockAnimationFrames()
+    const panel = await openBurnSpell(user)
+    const holdButton = within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' })
+    fireEvent.keyDown(holdButton, { key: ' ' })
+    act(() => frames.runAt(1500))
+    fireEvent.keyUp(holdButton, { key: ' ' })
+    expect(await screen.findByTestId('talisman-burn-effect')).toBeInTheDocument()
+    expect(screen.getByText('실실 꼬여 길길 막혀, 만사불통 얍!')).toHaveClass('room-burn-chant')
     await finishTalismanBurnAnimation()
 
-    expect(await screen.findByText('모든 저주는 화면 속에서 끝났습니다')).toBeInTheDocument()
+    expect(await screen.findByText('부적은 재가 되고 저주는 화면 속에서 끝났습니다.')).toBeInTheDocument()
     const stored = await getDoll(created.id)
     expect(stored?.interactionState.selectedCurse).toBeNull()
     expect(stored?.interactionState.talismanStatus).toBeNull()
     expect(stored?.interactionState.pins).toHaveLength(1)
     expect(screen.getByRole('toolbar', { name: '저주방 도구' })).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: '만사불통 부적' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '주문 외우기' })).toBeDisabled()
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
+    expect(screen.queryByText('실실 꼬여 길길 막혀, 만사불통 얍!')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '주문 외우기' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '부적' }))
     expect(await screen.findByRole('dialog', { name: '부적 선택' })).toBeInTheDocument()
@@ -1082,12 +1137,13 @@ describe('주문 외우기와 부적 태우기', () => {
   it('부적 태우기 저장 실패 시 이전 부적을 복원하고 다시 시도할 수 있다', async () => {
     const { user, created } = await openCurseRoomFromArchive('실패')
     await attachTalisman(user)
-    await user.click(screen.getByRole('button', { name: '부적' }))
-    await user.click(screen.getByRole('button', { name: '부적 태우기' }))
-    const confirm = screen.getByRole('dialog', { name: '만사불통 부적을 태울까요?' })
+    const frames = mockAnimationFrames()
+    const panel = await openBurnSpell(user)
     const originalIndexedDB = globalThis.indexedDB
 
-    fireEvent.click(within(confirm).getByRole('button', { name: '계속하기' }))
+    fireEvent.pointerDown(within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' }), { pointerId: 1 })
+    act(() => frames.runAt(1500))
+    await screen.findByTestId('talisman-burn-effect')
     Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined })
     await finishTalismanBurnAnimation()
     Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: originalIndexedDB })
@@ -1102,19 +1158,60 @@ describe('주문 외우기와 부적 태우기', () => {
   it('태운 부적은 저주방에 다시 들어와도 복원되지 않는다', async () => {
     const { user } = await openCurseRoomFromArchive('재진입')
     await attachTalisman(user)
-    await user.click(screen.getByRole('button', { name: '부적' }))
-    await user.click(screen.getByRole('button', { name: '부적 태우기' }))
-    fireEvent.click(screen.getByRole('button', { name: '계속하기' }))
+    const frames = mockAnimationFrames()
+    const panel = await openBurnSpell(user)
+    fireEvent.pointerDown(within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' }), { pointerId: 1 })
+    act(() => frames.runAt(1500))
+    await screen.findByTestId('talisman-burn-effect')
     await finishTalismanBurnAnimation()
-    await screen.findByText('모든 저주는 화면 속에서 끝났습니다')
+    await screen.findByText('부적은 재가 되고 저주는 화면 속에서 끝났습니다.')
 
     await user.click(screen.getByRole('button', { name: '← 나가기' }))
     await screen.findByRole('heading', { name: '내 인형 보관함' })
     await user.click(screen.getByRole('button', { name: '열기' }))
     await user.click(await screen.findByRole('button', { name: '저주방 들어가기' }))
 
-    expect(await screen.findByRole('button', { name: '주문 외우기' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '주문 외우기' })).not.toBeInTheDocument()
     expect(screen.queryByRole('img', { name: '만사불통 부적' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('curse-effect-mansabultong')).not.toBeInTheDocument()
+  })
+
+  it('연소 중 저주방을 나가면 남은 연소 타이머를 정리하고 부적 상태를 유지한다', async () => {
+    const { user, created } = await openCurseRoomFromArchive('정리')
+    await attachTalisman(user)
+    const frames = mockAnimationFrames()
+    const panel = await openBurnSpell(user)
+    fireEvent.pointerDown(within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' }), { pointerId: 1 })
+    act(() => frames.runAt(1500))
+    await screen.findByTestId('talisman-burn-effect')
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+
+    await user.click(screen.getByRole('button', { name: '← 나가기' }))
+    await screen.findByRole('heading', { name: '내 인형 보관함' })
+
+    expect(clearTimeoutSpy).toHaveBeenCalled()
+    expect(screen.queryByTestId('talisman-burn-effect')).not.toBeInTheDocument()
+    expect((await getDoll(created.id))?.interactionState.selectedCurse).toBe('mansabultong')
+    expect((await getDoll(created.id))?.interactionState.talismanStatus).toBe('attached')
+  })
+
+  it('움직임 감소 환경에서도 주문 완료부터 연소 저장까지 진행한다', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)', media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(),
+      removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    })))
+    const { user, created } = await openCurseRoomFromArchive('감소')
+    await attachTalisman(user)
+    const frames = mockAnimationFrames()
+    const panel = await openBurnSpell(user)
+    fireEvent.pointerDown(within(panel).getByRole('button', { name: '길게 눌러 주문 외우기' }), { pointerId: 1 })
+    act(() => frames.runAt(1500))
+    await screen.findByTestId('talisman-burn-effect')
+    expect(screen.getByTestId('curse-effect-mansabultong')).toHaveAttribute('data-effect-intensity', 'maximum')
+    await finishTalismanBurnAnimation()
+    await waitFor(async () => expect((await getDoll(created.id))?.interactionState.selectedCurse).toBeNull())
   })
 })
 

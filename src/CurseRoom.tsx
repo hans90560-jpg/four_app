@@ -23,10 +23,10 @@ import {
   TalismanPanel,
   TalismanPaper,
   TalismanReplacementDialog,
+  type CurseEffectIntensity,
 } from './Talisman'
 import {
   AttachedTalismanPanel,
-  ChantBurst,
   SpellPanel,
   TALISMAN_BURN_DURATION_MS,
   TalismanBurnDialog,
@@ -45,11 +45,16 @@ const ROOM_COMPOSITE_STYLE = {
   '--talisman-left': '28.5%',
   '--talisman-top': '12%',
   '--talisman-width': '43%',
-  '--talisman-height': '29%',
 } as CSSProperties
 
-type ActiveTool = 'needle' | 'shake' | 'talisman' | 'spell' | null
+type ActiveTool = 'needle' | 'shake' | 'talisman' | null
 type SaveStatus = 'saving' | 'saved' | 'error'
+type ShakeDirection = 'left' | 'right'
+type ShakeCry = { id: number; direction: ShakeDirection }
+
+const SHAKE_CRY_MIN_DISTANCE = 18
+const SHAKE_CRY_COOLDOWN_MS = 180
+const SHAKE_CRY_LIFETIME_MS = 540
 
 function useBlobObjectUrl(blob: Blob | null): string {
   const [url, setUrl] = useState('')
@@ -107,6 +112,7 @@ export default function CurseRoom({
   const [shakeX, setShakeX] = useState(0)
   const [shakeAngle, setShakeAngle] = useState(0)
   const [isReturning, setIsReturning] = useState(false)
+  const [shakeCries, setShakeCries] = useState<ShakeCry[]>([])
   const [keyboardPoint, setKeyboardPoint] = useState({ x: .5, y: .55 })
   const [isTalismanPanelOpen, setIsTalismanPanelOpen] = useState(false)
   const [curseTab, setCurseTab] = useState<CurseCategory>('occult')
@@ -115,13 +121,13 @@ export default function CurseRoom({
   const [isTalismanSaving, setIsTalismanSaving] = useState(false)
   const [talismanError, setTalismanError] = useState('')
   const [effectCurseId, setEffectCurseId] = useState<CurseId | null>(null)
-  const [isEffectEnhanced, setIsEffectEnhanced] = useState(false)
-  const [showChantBurst, setShowChantBurst] = useState(false)
+  const [effectIntensity, setEffectIntensity] = useState<CurseEffectIntensity>('normal')
   const [isAttachedPanelOpen, setIsAttachedPanelOpen] = useState(false)
   const [isSpellPanelOpen, setIsSpellPanelOpen] = useState(false)
   const [isCasting, setIsCasting] = useState(false)
   const [isBurnConfirmationOpen, setIsBurnConfirmationOpen] = useState(false)
   const [isTalismanBurning, setIsTalismanBurning] = useState(false)
+  const [burnChant, setBurnChant] = useState('')
   const faceUrl = useBlobObjectUrl(doll?.faceBlob ?? null)
   const attachedCurseId = doll?.interactionState.talismanStatus === 'attached'
     ? doll.interactionState.selectedCurse
@@ -131,7 +137,16 @@ export default function CurseRoom({
   const confirmedPinsRef = useRef<Pin[]>([])
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
   const saveVersionRef = useRef(0)
-  const dragRef = useRef<{ pointerId: number; startX: number; maxX: number } | null>(null)
+  const dragRef = useRef<{
+    pointerId: number
+    startX: number
+    maxX: number
+    direction: -1 | 0 | 1
+    peakX: number
+    lastCryAt: number
+  } | null>(null)
+  const shakeCryIdRef = useRef(0)
+  const shakeCryTimersRef = useRef<Map<number, number>>(new Map())
   const sparkleTimerRef = useRef<number | null>(null)
   const motionTimerRef = useRef<number | null>(null)
   const effectTimerRef = useRef<number | null>(null)
@@ -145,8 +160,25 @@ export default function CurseRoom({
   const spellDialogRef = useRef<HTMLElement>(null)
   const burnDialogRef = useRef<HTMLElement>(null)
   const burnButtonRef = useRef<HTMLButtonElement>(null)
-  const spellButtonRef = useRef<HTMLButtonElement>(null)
   const roomPageRef = useRef<HTMLDivElement>(null)
+
+  const clearShakeCries = useCallback(() => {
+    shakeCryTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+    shakeCryTimersRef.current.clear()
+    setShakeCries([])
+  }, [])
+
+  const showShakeCry = useCallback((direction: ShakeDirection) => {
+    const id = ++shakeCryIdRef.current
+    setShakeCries((current) => [...current, { id, direction }].slice(-3))
+    const timer = window.setTimeout(() => {
+      shakeCryTimersRef.current.delete(id)
+      if (mountedRef.current) {
+        setShakeCries((current) => current.filter((cry) => cry.id !== id))
+      }
+    }, SHAKE_CRY_LIFETIME_MS)
+    shakeCryTimersRef.current.set(id, timer)
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
@@ -175,8 +207,14 @@ export default function CurseRoom({
       if (motionTimerRef.current !== null) window.clearTimeout(motionTimerRef.current)
       if (effectTimerRef.current !== null) window.clearTimeout(effectTimerRef.current)
       if (burnTimerRef.current !== null) window.clearTimeout(burnTimerRef.current)
+      shakeCryTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+      shakeCryTimersRef.current.clear()
     }
   }, [dollId])
+
+  useEffect(() => {
+    if (activeTool !== 'shake') clearShakeCries()
+  }, [activeTool, clearShakeCries])
 
   useEffect(() => {
     if (!isTalismanPanelOpen) return
@@ -254,7 +292,7 @@ export default function CurseRoom({
     dialog?.querySelector<HTMLButtonElement>('button')?.focus()
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (document.querySelector('.talisman-burn-dialog')) return
+      if (document.querySelector('.talisman-burn-dialog') || document.querySelector('.spell-panel')) return
       if (event.key === 'Escape') {
         event.preventDefault()
         setIsAttachedPanelOpen(false)
@@ -284,6 +322,7 @@ export default function CurseRoom({
     if (!isSpellPanelOpen) return
     const dialog = spellDialogRef.current
     roomPageRef.current?.setAttribute('inert', '')
+    attachedDialogRef.current?.setAttribute('inert', '')
     dialog?.querySelector<HTMLButtonElement>('.spell-hold-button')?.focus()
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -309,7 +348,8 @@ export default function CurseRoom({
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
       roomPageRef.current?.removeAttribute('inert')
-      spellButtonRef.current?.focus()
+      attachedDialogRef.current?.removeAttribute('inert')
+      burnButtonRef.current?.focus()
     }
   }, [isSpellPanelOpen])
 
@@ -372,28 +412,26 @@ export default function CurseRoom({
     setIsTalismanPanelOpen(true)
   }
 
-  const showCurseEffect = useCallback((curseId: CurseId, enhanced = false) => {
+  const showCurseEffect = useCallback((
+    curseId: CurseId,
+    intensity: CurseEffectIntensity = 'normal',
+  ) => {
     if (effectTimerRef.current !== null) window.clearTimeout(effectTimerRef.current)
     setEffectCurseId(curseId)
-    setIsEffectEnhanced(enhanced)
-    setShowChantBurst(enhanced)
+    setEffectIntensity(intensity)
+    const duration = intensity === 'maximum'
+      ? TALISMAN_BURN_DURATION_MS
+      : intensity === 'enhanced' ? 1600 : 1400
     effectTimerRef.current = window.setTimeout(() => {
       if (!mountedRef.current) return
       setEffectCurseId(null)
-      setIsEffectEnhanced(false)
-      setShowChantBurst(false)
-    }, enhanced ? 1600 : 1400)
+      setEffectIntensity('normal')
+    }, duration)
   }, [])
 
   const handleCastingChange = useCallback((casting: boolean) => {
     setIsCasting(casting)
   }, [])
-
-  const completeSpell = useCallback(() => {
-    if (!attachedCurseId) return
-    setNotice('주문이 완성됐어요')
-    showCurseEffect(attachedCurseId, true)
-  }, [attachedCurseId, showCurseEffect])
 
   const finishTalismanBurn = useCallback(async () => {
     if (burnSaveRef.current || !mountedRef.current) return
@@ -402,6 +440,14 @@ export default function CurseRoom({
       window.clearTimeout(burnTimerRef.current)
       burnTimerRef.current = null
     }
+    if (effectTimerRef.current !== null) {
+      window.clearTimeout(effectTimerRef.current)
+      effectTimerRef.current = null
+    }
+      setBurnChant('')
+      setEffectCurseId(null)
+      setEffectIntensity('normal')
+      setIsTalismanBurning(false)
       setSaveStatus('saving')
       try {
         const latest = await getDoll(dollId)
@@ -419,29 +465,38 @@ export default function CurseRoom({
         setSelectedCurseId(null)
         setActiveTool(null)
         setSaveStatus('saved')
-        setNotice('모든 저주는 화면 속에서 끝났습니다')
+        setNotice('부적은 재가 되고 저주는 화면 속에서 끝났습니다.')
       } catch {
         if (!mountedRef.current) return
         setSaveStatus('error')
         setNotice('부적 상태를 저장하지 못했어요. 다시 시도해 주세요.')
       } finally {
         burnSaveRef.current = false
-        if (mountedRef.current) setIsTalismanBurning(false)
       }
   }, [dollId])
 
   const startTalismanBurn = () => {
-    if (!attachedCurseId || isTalismanBurning) return
+    if (!attachedCurseId || isTalismanBurning || burnSaveRef.current) return
+    const curse = getCurseById(attachedCurseId)
+    const curseName = curse?.name ?? '현재 저주'
     burnSaveRef.current = false
-    setIsBurnConfirmationOpen(false)
+    setIsSpellPanelOpen(false)
     setIsAttachedPanelOpen(false)
+    setIsCasting(false)
     setIsTalismanBurning(true)
-    setEffectCurseId(null)
-    setShowChantBurst(false)
-    setNotice(`${getCurseById(attachedCurseId)?.name ?? '현재'} 부적을 태우는 중이에요.`)
+    setBurnChant(curse?.chant ?? '')
+    setNotice(`${curseName}의 기운이 최고조로 치솟습니다.`)
+    showCurseEffect(attachedCurseId, 'maximum')
 
     if (burnTimerRef.current !== null) window.clearTimeout(burnTimerRef.current)
     burnTimerRef.current = window.setTimeout(() => void finishTalismanBurn(), TALISMAN_BURN_DURATION_MS)
+  }
+
+  const openBurnSpell = () => {
+    if (!attachedCurseId || isTalismanBurning || isSpellPanelOpen) return
+    setIsBurnConfirmationOpen(false)
+    setNotice(`${getCurseById(attachedCurseId)?.name ?? '현재 저주'} 부적의 주문을 준비합니다.`)
+    setIsSpellPanelOpen(true)
   }
 
   const closeTalismanPanel = () => {
@@ -595,10 +650,18 @@ export default function CurseRoom({
   const startShake = (event: PointerEvent<HTMLDivElement>) => {
     if (activeTool !== 'shake') return
     event.preventDefault()
+    clearShakeCries()
     const rect = event.currentTarget.getBoundingClientRect()
     const maxX = Math.max(36, Math.min(rect.width * .3, window.innerWidth * .22))
     const startX = Number.isFinite(event.clientX) ? event.clientX : 0
-    dragRef.current = { pointerId: event.pointerId, startX, maxX }
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX,
+      maxX,
+      direction: 0,
+      peakX: startX,
+      lastCryAt: -Infinity,
+    }
     event.currentTarget.setPointerCapture?.(event.pointerId)
     setIsReturning(false)
   }
@@ -606,16 +669,45 @@ export default function CurseRoom({
   const moveShake = (event: PointerEvent<HTMLDivElement>) => {
     if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return
     event.preventDefault()
-    const clientX = Number.isFinite(event.clientX) ? event.clientX : dragRef.current.startX
-    const nextX = Math.min(dragRef.current.maxX, Math.max(-dragRef.current.maxX, clientX - dragRef.current.startX))
+    const drag = dragRef.current
+    const clientX = Number.isFinite(event.clientX) ? event.clientX : drag.startX
+    const nextX = Math.min(drag.maxX, Math.max(-drag.maxX, clientX - drag.startX))
     setShakeX(nextX)
-    setShakeAngle((nextX / dragRef.current.maxX) * 12)
+    setShakeAngle((nextX / drag.maxX) * 12)
+
+    const now = performance.now()
+    if (drag.direction === 0) {
+      const initialDistance = clientX - drag.startX
+      if (Math.abs(initialDistance) >= SHAKE_CRY_MIN_DISTANCE && now - drag.lastCryAt >= SHAKE_CRY_COOLDOWN_MS) {
+        drag.direction = initialDistance > 0 ? 1 : -1
+        drag.peakX = clientX
+        drag.lastCryAt = now
+        showShakeCry(drag.direction > 0 ? 'right' : 'left')
+      }
+    } else if (drag.direction > 0) {
+      if (clientX > drag.peakX) {
+        drag.peakX = clientX
+      } else if (drag.peakX - clientX >= SHAKE_CRY_MIN_DISTANCE && now - drag.lastCryAt >= SHAKE_CRY_COOLDOWN_MS) {
+        drag.direction = -1
+        drag.peakX = clientX
+        drag.lastCryAt = now
+        showShakeCry('left')
+      }
+    } else if (clientX < drag.peakX) {
+      drag.peakX = clientX
+    } else if (clientX - drag.peakX >= SHAKE_CRY_MIN_DISTANCE && now - drag.lastCryAt >= SHAKE_CRY_COOLDOWN_MS) {
+      drag.direction = 1
+      drag.peakX = clientX
+      drag.lastCryAt = now
+      showShakeCry('right')
+    }
   }
 
   const endShake = (event: PointerEvent<HTMLDivElement>) => {
     if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return
     event.currentTarget.releasePointerCapture?.(event.pointerId)
     dragRef.current = null
+    clearShakeCries()
     setIsReturning(true)
     setShakeX(0)
     setShakeAngle(0)
@@ -732,10 +824,23 @@ export default function CurseRoom({
                   >✦</span>
                 )}
               </div>
-              {effectCurseId && <CurseEffect curseId={effectCurseId} enhanced={isEffectEnhanced} />}
-              {showChantBurst && <ChantBurst />}
+              {effectCurseId && <CurseEffect curseId={effectCurseId} intensity={effectIntensity} />}
+              {shakeCries.map((cry, index) => (
+                <span
+                  key={cry.id}
+                  className={`shake-cry is-${cry.direction}`}
+                  data-testid="shake-cry"
+                  aria-hidden="true"
+                  style={{ '--shake-cry-index': index } as CSSProperties}
+                >악!</span>
+              ))}
             </div>
           </div>
+          {burnChant && (
+            <p className="room-burn-chant" role="status" aria-live="polite" aria-atomic="true">
+              {burnChant}
+            </p>
+          )}
         </section>
 
         <section className="tool-chest" aria-labelledby="tool-chest-title">
@@ -770,22 +875,8 @@ export default function CurseRoom({
               onClick={openTalismanPanel}
             ><span aria-hidden="true">▤</span>부적</button>
             <button type="button" aria-pressed="false" onClick={() => setNotice('다음 단계에서 제공됩니다')}><span aria-hidden="true">◇</span>인형 태우기</button>
-            <button
-              type="button"
-              ref={spellButtonRef}
-              className={activeTool === 'spell' ? 'is-selected' : ''}
-              aria-pressed={activeTool === 'spell'}
-              disabled={!attachedCurseId || isTalismanBurning}
-              onClick={() => {
-                if (!attachedCurseId || isTalismanBurning) return
-                setActiveTool('spell')
-                setNotice(`${getCurseById(attachedCurseId)?.name ?? '현재'} 부적의 주문을 준비합니다.`)
-                setIsSpellPanelOpen(true)
-              }}
-            ><span aria-hidden="true">◇</span>주문 외우기</button>
             <button type="button" aria-pressed="false" onClick={() => setNotice('다음 단계에서 제공됩니다')}><span aria-hidden="true">◇</span>정화하기</button>
           </div>
-          {!attachedCurseId && <p className="tool-requirement">먼저 부적을 붙여 주세요</p>}
           <p className="room-notice" role={saveStatus === 'error' ? 'alert' : 'status'} aria-live="polite">{notice}</p>
         </section>
         </main>
@@ -839,9 +930,13 @@ export default function CurseRoom({
         <SpellPanel
           dialogRef={spellDialogRef}
           curseId={attachedCurseId}
-          onClose={() => { setIsSpellPanelOpen(false); setIsCasting(false) }}
+          onClose={() => {
+            setIsSpellPanelOpen(false)
+            setIsCasting(false)
+            setNotice('주문을 취소했습니다. 부적은 그대로 붙어 있어요.')
+          }}
           onCastingChange={handleCastingChange}
-          onComplete={completeSpell}
+          onComplete={startTalismanBurn}
         />
       )}
 
@@ -851,7 +946,7 @@ export default function CurseRoom({
           curseId={attachedCurseId}
           busy={isTalismanBurning}
           onCancel={() => setIsBurnConfirmationOpen(false)}
-          onConfirm={startTalismanBurn}
+          onConfirm={openBurnSpell}
         />
       )}
     </div>
